@@ -1,0 +1,672 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Asterisk Dashboard</title>
+    <style>
+        :root {
+            --bg-color: #0b1120;
+            --card-bg: #1e293b;
+            --card-border: #334155;
+            --text-primary: #f8fafc;
+            --text-secondary: #94a3b8;
+            --accent: #38bdf8;
+            --success: #22c55e;
+            --warning: #eab308;
+            --danger: #ef4444;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-primary);
+            line-height: 1.5;
+            padding: 24px;
+        }
+
+        .container {
+            max-width: 1300px;
+            margin: 0 auto;
+        }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding-bottom: 20px;
+            border-bottom: 1px solid var(--card-border);
+            margin-bottom: 24px;
+        }
+
+        .title-group h1 {
+            font-size: 1.8rem;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .badge-live {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 0.75rem;
+            padding: 2px 8px;
+            border-radius: 9999px;
+            background: rgba(34, 197, 94, 0.2);
+            color: #4ade80;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 0.9rem;
+            padding: 6px 14px;
+            border-radius: 20px;
+            background: rgba(34, 197, 94, 0.15);
+            color: var(--success);
+            font-weight: 600;
+        }
+
+        .status-badge.offline {
+            background: rgba(239, 68, 68, 0.15);
+            color: var(--danger);
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background-color: currentColor;
+            animation: pulse 2s infinite ease-in-out;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.5; transform: scale(1.15); }
+        }
+
+        /* Metric cards */
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+            gap: 16px;
+            margin-bottom: 28px;
+        }
+
+        .metric-card {
+            background: var(--card-bg);
+            border: 1px solid var(--card-border);
+            border-radius: 12px;
+            padding: 18px 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+        }
+
+        .metric-label {
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            font-weight: 600;
+        }
+
+        .metric-val {
+            font-size: 1.4rem;
+            font-weight: 700;
+            color: var(--text-primary);
+        }
+
+        /* Grid Sections */
+        .section-grid {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 24px;
+            margin-bottom: 24px;
+        }
+
+        @media (min-width: 900px) {
+            .section-grid-half {
+                grid-template-columns: 1fr 1fr;
+            }
+        }
+
+        .card {
+            background: var(--card-bg);
+            border: 1px solid var(--card-border);
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+        }
+
+        .card-header {
+            padding: 16px 20px;
+            background: rgba(255, 255, 255, 0.02);
+            border-bottom: 1px solid var(--card-border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .card-header h2 {
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: var(--accent);
+        }
+
+        .card-header .count {
+            background: #334155;
+            font-size: 0.8rem;
+            padding: 2px 8px;
+            border-radius: 10px;
+        }
+
+        .table-responsive {
+            width: 100%;
+            overflow-x: auto;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            text-align: left;
+            font-size: 0.9rem;
+        }
+
+        th {
+            background: rgba(15, 23, 42, 0.6);
+            color: var(--text-secondary);
+            font-weight: 600;
+            padding: 12px 18px;
+            border-bottom: 1px solid var(--card-border);
+        }
+
+        td {
+            padding: 12px 18px;
+            border-bottom: 1px solid rgba(51, 65, 85, 0.5);
+            color: #cbd5e1;
+            word-break: break-all;
+        }
+
+        tr:last-child td {
+            border-bottom: none;
+        }
+
+        tr:hover td {
+            background: rgba(255, 255, 255, 0.02);
+        }
+
+        .empty-row {
+            text-align: center;
+            color: var(--text-secondary);
+            padding: 30px;
+            font-style: italic;
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 3px 8px;
+            border-radius: 6px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            white-space: nowrap;
+        }
+
+        .badge-green {
+            background: rgba(34, 197, 94, 0.2);
+            color: #4ade80;
+        }
+
+        .badge-yellow {
+            background: rgba(234, 179, 8, 0.2);
+            color: #facc15;
+        }
+
+        .badge-gray {
+            background: rgba(148, 163, 184, 0.2);
+            color: #cbd5e1;
+        }
+
+        .badge-red {
+            background: rgba(239, 68, 68, 0.2);
+            color: #f87171;
+        }
+
+        footer {
+            margin-top: 30px;
+            text-align: center;
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="title-group">
+                <h1>
+                    Asterisk Dashboard 
+                    <span class="badge-live"><span class="status-dot"></span> WebSocket Live</span>
+                </h1>
+                <div style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 4px;" id="ast-version">
+                    {{.Global.Version}}
+                </div>
+            </div>
+            <div style="display: flex; gap: 12px; align-items: center;">
+                <div class="status-badge" id="conn-status">
+                    <span class="status-dot"></span>
+                    <span id="conn-text">{{.Global.Status}}</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- Global Metrics -->
+        <div class="metrics-grid">
+            <div class="metric-card">
+                <span class="metric-label">Asterisk Uptime</span>
+                <span class="metric-val" id="m-uptime">{{if .Global.Uptime}}{{.Global.Uptime}}{{else}}N/A{{end}}</span>
+            </div>
+            <div class="metric-card">
+                <span class="metric-label">Active Calls</span>
+                <span class="metric-val" id="m-calls">{{if .Global.ActiveCalls}}{{.Global.ActiveCalls}}{{else}}0{{end}}</span>
+            </div>
+            <div class="metric-card">
+                <span class="metric-label">Active Channels</span>
+                <span class="metric-val" id="m-channels">{{if .Global.ActiveChannels}}{{.Global.ActiveChannels}}{{else}}0{{end}}</span>
+            </div>
+            <div class="metric-card">
+                <span class="metric-label">Processed Calls</span>
+                <span class="metric-val" id="m-processed">{{if .Global.CallsProcessed}}{{.Global.CallsProcessed}}{{else}}0{{end}}</span>
+            </div>
+            <div class="metric-card">
+                <span class="metric-label">Last Updated</span>
+                <span class="metric-val" id="m-lastupdate" style="font-size: 1.1rem;">{{.Global.LastUpdated}}</span>
+            </div>
+        </div>
+
+        <!-- Active Calls Section -->
+        <div class="section-grid">
+            <div class="card">
+                <div class="card-header">
+                    <h2>Active Calls &amp; Channels</h2>
+                    <span class="count" id="count-calls">{{len .ActiveChannels}}</span>
+                </div>
+                <div class="table-responsive">
+                    <table id="tbl-calls">
+                        <thead>
+                            <tr>
+                                <th>Channel</th>
+                                <th>Caller ID</th>
+                                <th>Target / Destination</th>
+                                <th>State</th>
+                                <th>Application</th>
+                                <th>Duration</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {{range .ActiveChannels}}
+                            <tr>
+                                <td><strong>{{.Channel}}</strong></td>
+                                <td>{{.CallerIDNum}}{{if .CallerIDName}} ({{.CallerIDName}}){{end}}</td>
+                                <td>{{if .ConnectedLineNum}}{{.ConnectedLineNum}}{{else}}{{.Extension}}{{end}}</td>
+                                <td><span class="badge {{getDeviceBadge .ChannelStateDesc}}">{{.ChannelStateDesc}}</span></td>
+                                <td>{{.Application}}{{if .AppData}} ({{.AppData}}){{end}}</td>
+                                <td>{{.Duration}} s</td>
+                            </tr>
+                            {{else}}
+                            <tr><td colspan="6" class="empty-row">No active calls</td></tr>
+                            {{end}}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <div class="section-grid section-grid-half">
+            <!-- Endpoints -->
+            <div class="card">
+                <div class="card-header">
+                    <h2>PJSIP Endpoints</h2>
+                    <span class="count" id="count-endpoints">{{len .Endpoints}}</span>
+                </div>
+                <div class="table-responsive">
+                    <table id="tbl-endpoints">
+                        <thead>
+                            <tr>
+                                <th>Name</th>
+                                <th>State</th>
+                                <th>Context</th>
+                                <th>Codecs</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {{range .Endpoints}}
+                            <tr>
+                                <td><strong>{{.ObjectName}}</strong></td>
+                                <td><span class="badge {{getDeviceBadge .Devicestate}}">{{.Devicestate}}</span></td>
+                                <td>{{.Context}}</td>
+                                <td>{{.Allow}}</td>
+                            </tr>
+                            {{else}}
+                            <tr><td colspan="4" class="empty-row">No endpoints available</td></tr>
+                            {{end}}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Contacts -->
+            <div class="card">
+                <div class="card-header">
+                    <h2>PJSIP Contacts</h2>
+                    <span class="count" id="count-contacts">{{len .Contacts}}</span>
+                </div>
+                <div class="table-responsive">
+                    <table id="tbl-contacts">
+                        <thead>
+                            <tr>
+                                <th>Contact / URI</th>
+                                <th>Status</th>
+                                <th>RTT (Latency)</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {{range .Contacts}}
+                            <tr>
+                                <td><strong>{{.ObjectName}}</strong></td>
+                                <td><span class="badge {{getStatusBadge .Status}}">{{.Status}}</span></td>
+                                <td>{{.Roundtrip}}</td>
+                            </tr>
+                            {{else}}
+                            <tr><td colspan="3" class="empty-row">No registered contacts</td></tr>
+                            {{end}}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <div class="section-grid">
+            <!-- Trunks / Outbound Registrations -->
+            <div class="card">
+                <div class="card-header">
+                    <h2>Trunks &amp; Registrations</h2>
+                    <span class="count" id="count-trunks">{{len .Trunks}}</span>
+                </div>
+                <div class="table-responsive">
+                    <table id="tbl-trunks">
+                        <thead>
+                            <tr>
+                                <th>Trunk Name</th>
+                                <th>Type</th>
+                                <th>Status</th>
+                                <th>Server Address</th>
+                                <th>Details</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {{range .Trunks}}
+                            <tr>
+                                <td><strong>{{.Name}}</strong></td>
+                                <td>{{.Type}}</td>
+                                <td><span class="badge {{getStatusBadge .Status}}">{{.Status}}</span></td>
+                                <td>{{.Address}}</td>
+                                <td>{{.Details}}</td>
+                            </tr>
+                            {{else}}
+                            <tr><td colspan="5" class="empty-row">No registered trunks or external providers</td></tr>
+                            {{end}}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- Call History (Session Calls) -->
+        <div class="section-grid">
+            <div class="card">
+                <div class="card-header">
+                    <h2>Call History (Recent Calls)</h2>
+                    <span class="count" id="count-history">{{len .CallHistory}}</span>
+                </div>
+                <div class="table-responsive">
+                    <table id="tbl-history">
+                        <thead>
+                            <tr>
+                                <th>Start Time</th>
+                                <th>Caller ID</th>
+                                <th>Destination</th>
+                                <th>Disposition</th>
+                                <th>Total Duration</th>
+                                <th>Billable</th>
+                                <th>Channel</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {{range .CallHistory}}
+                            <tr>
+                                <td>{{.StartTime}}</td>
+                                <td><strong>{{.Caller}}</strong>{{if .CallerName}} ({{.CallerName}}){{end}}</td>
+                                <td>{{.Destination}}</td>
+                                <td><span class="badge {{getDispositionBadge .Disposition}}">{{.Disposition}}</span></td>
+                                <td>{{.Duration}}</td>
+                                <td>{{.Billable}}</td>
+                                <td><small style="color: var(--text-secondary)">{{.Channel}}</small></td>
+                            </tr>
+                            {{else}}
+                            <tr><td colspan="7" class="empty-row">No recorded call history yet</td></tr>
+                            {{end}}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <footer>
+            Asterisk Dashboard &bull; Connected via Real-Time WebSocket
+        </footer>
+    </div>
+
+    <script>
+        function getBadgeClass(val) {
+            val = (val || '').toLowerCase().trim();
+
+            // 1. Red states (offline / unavailable / unreachable)
+            if (val.includes('unavail') || val.includes('unreach') || val.includes('unreg') || val.includes('offline') || val.includes('reject') || val.includes('down')) {
+                return 'badge-red';
+            }
+
+            // 2. Green states (idle / not in use / reachable / registered / online / up)
+            // MUST be evaluated before "in use", because "not IN USE" contains "in use"!
+            if (val.includes('not in use') || val.includes('idle') || val.includes('registered') || val.includes('reachable') || val.includes('avail') || val.includes('online') || val.includes('up')) {
+                return 'badge-green';
+            }
+
+            // 3. Yellow states (active call / in use / busy / ringing)
+            if (val.includes('in use') || val.includes('busy') || val.includes('ringing') || val.includes('ring')) {
+                return 'badge-yellow';
+            }
+
+            return 'badge-gray';
+        }
+
+        function getDispositionBadgeClass(disp) {
+            disp = (disp || '').toUpperCase();
+            if (disp.includes('ANSWER')) return 'badge-green';
+            if (disp.includes('BUSY')) return 'badge-yellow';
+            if (disp.includes('NO ANSWER') || disp.includes('CANCEL')) return 'badge-gray';
+            if (disp.includes('FAIL') || disp.includes('REJECT') || disp.includes('CONGESTION')) return 'badge-red';
+            return 'badge-gray';
+        }
+
+        function updateUI(data) {
+            if (!data) return;
+
+            // Global metrics
+            document.getElementById('ast-version').innerText = data.global.version || 'Asterisk 23';
+            document.getElementById('m-uptime').innerText = data.global.uptime || 'N/A';
+            document.getElementById('m-calls').innerText = data.global.active_calls || '0';
+            document.getElementById('m-channels').innerText = data.global.active_channels || '0';
+            document.getElementById('m-processed').innerText = data.global.calls_processed || '0';
+            document.getElementById('m-lastupdate').innerText = data.global.last_updated || '';
+
+            const connBadge = document.getElementById('conn-status');
+            const connText = document.getElementById('conn-text');
+            if (data.global.status === 'Online') {
+                connBadge.className = 'status-badge';
+                connText.innerText = 'Online';
+            } else {
+                connBadge.className = 'status-badge offline';
+                connText.innerText = 'Offline';
+            }
+
+            // Active Calls Table
+            document.getElementById('count-calls').innerText = data.active_channels_list ? data.active_channels_list.length : 0;
+            const callTbody = document.querySelector('#tbl-calls tbody');
+            if (data.active_channels_list && data.active_channels_list.length > 0) {
+                callTbody.innerHTML = data.active_channels_list.map(c => `
+                    <tr>
+                        <td><strong>${escapeHtml(c.channel)}</strong></td>
+                        <td>${escapeHtml(c.caller_id_num || '-')}${c.caller_id_name ? ` (${escapeHtml(c.caller_id_name)})` : ''}</td>
+                        <td>${escapeHtml(c.connected_line_num || c.extension || '-')}</td>
+                        <td><span class="badge ${getBadgeClass(c.channel_state_desc)}">${escapeHtml(c.channel_state_desc || '-')}</span></td>
+                        <td>${escapeHtml(c.application || '-')}${c.app_data ? ` (${escapeHtml(c.app_data)})` : ''}</td>
+                        <td>${escapeHtml(c.duration || '0')} s</td>
+                    </tr>
+                `).join('');
+            } else {
+                callTbody.innerHTML = '<tr><td colspan="6" class="empty-row">No active calls</td></tr>';
+            }
+
+            // Endpoints Table
+            document.getElementById('count-endpoints').innerText = data.endpoints ? data.endpoints.length : 0;
+            const epTbody = document.querySelector('#tbl-endpoints tbody');
+            if (data.endpoints && data.endpoints.length > 0) {
+                epTbody.innerHTML = data.endpoints.map(ep => `
+                    <tr>
+                        <td><strong>${escapeHtml(ep.object_name)}</strong></td>
+                        <td><span class="badge ${getBadgeClass(ep.device_state)}">${escapeHtml(ep.device_state || 'Unknown')}</span></td>
+                        <td>${escapeHtml(ep.context || '-')}</td>
+                        <td>${escapeHtml(ep.allow || '-')}</td>
+                    </tr>
+                `).join('');
+            } else {
+                epTbody.innerHTML = '<tr><td colspan="4" class="empty-row">No endpoints available</td></tr>';
+            }
+
+            // Contacts Table
+            document.getElementById('count-contacts').innerText = data.contacts ? data.contacts.length : 0;
+            const contactTbody = document.querySelector('#tbl-contacts tbody');
+            if (data.contacts && data.contacts.length > 0) {
+                contactTbody.innerHTML = data.contacts.map(c => `
+                    <tr>
+                        <td><strong>${escapeHtml(c.object_name)}</strong></td>
+                        <td><span class="badge ${getBadgeClass(c.status)}">${escapeHtml(c.status || '-')}</span></td>
+                        <td>${escapeHtml(c.roundtrip || '-')}</td>
+                    </tr>
+                `).join('');
+            } else {
+                contactTbody.innerHTML = '<tr><td colspan="3" class="empty-row">No registered contacts</td></tr>';
+            }
+
+            // Trunks Table
+            document.getElementById('count-trunks').innerText = data.trunks ? data.trunks.length : 0;
+            const trunkTbody = document.querySelector('#tbl-trunks tbody');
+            if (data.trunks && data.trunks.length > 0) {
+                trunkTbody.innerHTML = data.trunks.map(t => `
+                    <tr>
+                        <td><strong>${escapeHtml(t.name)}</strong></td>
+                        <td>${escapeHtml(t.type || '-')}</td>
+                        <td><span class="badge ${getBadgeClass(t.status)}">${escapeHtml(t.status || '-')}</span></td>
+                        <td>${escapeHtml(t.address || '-')}</td>
+                        <td>${escapeHtml(t.details || '-')}</td>
+                    </tr>
+                `).join('');
+            } else {
+                trunkTbody.innerHTML = '<tr><td colspan="5" class="empty-row">No registered trunks or external providers</td></tr>';
+            }
+
+            // Call History Table
+            document.getElementById('count-history').innerText = data.call_history ? data.call_history.length : 0;
+            const historyTbody = document.querySelector('#tbl-history tbody');
+            if (data.call_history && data.call_history.length > 0) {
+                historyTbody.innerHTML = data.call_history.map(h => `
+                    <tr>
+                        <td>${escapeHtml(h.start_time || '-')}</td>
+                        <td><strong>${escapeHtml(h.caller || '-')}</strong>${h.caller_name ? ` (${escapeHtml(h.caller_name)})` : ''}</td>
+                        <td>${escapeHtml(h.destination || '-')}</td>
+                        <td><span class="badge ${getDispositionBadgeClass(h.disposition)}">${escapeHtml(h.disposition || 'UNKNOWN')}</span></td>
+                        <td>${escapeHtml(h.duration || '00:00')}</td>
+                        <td>${escapeHtml(h.billable || '00:00')}</td>
+                        <td><small style="color: var(--text-secondary)">${escapeHtml(h.channel || '-')}</small></td>
+                    </tr>
+                `).join('');
+            } else {
+                historyTbody.innerHTML = '<tr><td colspan="7" class="empty-row">No recorded call history yet</td></tr>';
+            }
+        }
+
+        function escapeHtml(str) {
+            if (!str) return '';
+            return str.replace(/[&<>"']/g, function(m) {
+                return ({
+                    '&': '&amp;',
+                    '<': '&lt;',
+                    '>': '&gt;',
+                    '"': '&quot;',
+                    "'": '&#39;'
+                })[m];
+            });
+        }
+
+        // Establish real-time WebSocket connection
+        function connectWebSocket() {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${protocol}//${window.location.host}/ws`;
+            const socket = new WebSocket(wsUrl);
+
+            socket.onopen = function() {
+                console.log("[WebSocket] Connected.");
+            };
+
+            socket.onmessage = function(event) {
+                try {
+                    const data = JSON.parse(event.data);
+                    updateUI(data);
+                } catch(e) {
+                    console.error("[WebSocket] Parse error:", e);
+                }
+            };
+
+            socket.onclose = function() {
+                console.warn("[WebSocket] Disconnected. Reconnecting in 2 seconds...");
+                const connBadge = document.getElementById('conn-status');
+                connBadge.className = 'status-badge offline';
+                document.getElementById('conn-text').innerText = 'Offline';
+                setTimeout(connectWebSocket, 2000);
+            };
+
+            socket.onerror = function(err) {
+                console.error("[WebSocket] Error:", err);
+                socket.close();
+            };
+        }
+
+        connectWebSocket();
+    </script>
+</body>
+</html>

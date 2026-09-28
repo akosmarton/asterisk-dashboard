@@ -1,0 +1,12 @@
+# Ignore Git
+.git
+.gitignore
+
+# Ignore build artifacts and local files
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+asterisk-dashboard
+*.log
