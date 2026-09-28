@@ -43,6 +43,7 @@
             padding-bottom: 20px;
             border-bottom: 1px solid var(--card-border);
             margin-bottom: 24px;
+            gap: 16px;
         }
 
         .title-group h1 {
@@ -50,7 +51,15 @@
             font-weight: 700;
             display: flex;
             align-items: center;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+
+        .header-actions {
+            display: flex;
             gap: 12px;
+            align-items: center;
+            flex-shrink: 0;
         }
 
         .badge-live {
@@ -65,6 +74,7 @@
             font-weight: 600;
             text-transform: uppercase;
             letter-spacing: 0.05em;
+            white-space: nowrap;
         }
 
         .status-badge {
@@ -77,6 +87,49 @@
             background: rgba(34, 197, 94, 0.15);
             color: var(--success);
             font-weight: 600;
+            white-space: nowrap;
+        }
+
+        .btn-signout {
+            text-decoration: none;
+            color: var(--text-secondary);
+            border: 1px solid var(--card-border);
+            padding: 6px 14px;
+            border-radius: 8px;
+            font-size: 0.85rem;
+            font-weight: 500;
+            white-space: nowrap;
+            transition: all 0.2s;
+        }
+
+        .btn-signout:hover {
+            color: var(--text-primary);
+            border-color: var(--accent);
+        }
+
+        @media (max-width: 640px) {
+            body {
+                padding: 16px;
+            }
+
+            header {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 14px;
+            }
+
+            .title-group {
+                width: 100%;
+            }
+
+            .title-group h1 {
+                font-size: 1.5rem;
+            }
+
+            .header-actions {
+                width: 100%;
+                justify-content: space-between;
+            }
         }
 
         .status-badge.offline {
@@ -266,12 +319,12 @@
                     {{.Global.Version}}
                 </div>
             </div>
-            <div style="display: flex; gap: 12px; align-items: center;">
+            <div class="header-actions">
                 <div class="status-badge" id="conn-status">
                     <span class="status-dot"></span>
                     <span id="conn-text">{{.Global.Status}}</span>
                 </div>
-                <a href="/logout" style="text-decoration: none; color: var(--text-secondary); border: 1px solid var(--card-border); padding: 5px 12px; border-radius: 8px; font-size: 0.85rem; font-weight: 500; transition: all 0.2s;" onmouseover="this.style.color='var(--text-primary)';this.style.borderColor='var(--accent)'" onmouseout="this.style.color='var(--text-secondary)';this.style.borderColor='var(--card-border)'">Sign Out</a>
+                <a href="/logout" class="btn-signout">Sign Out</a>
             </div>
         </header>
 
