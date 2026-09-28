@@ -92,7 +92,7 @@ Open your browser at: **http://localhost:8080**
 
 ## Credits
 
-This project and its codebase were written by **Gemini 3.8 Flash**.
+This project and its codebase were written by **Google Gemini**.
 
 ---
 
