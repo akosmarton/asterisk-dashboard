@@ -142,7 +142,7 @@ func (a *AuthManager) HandleLogout(w http.ResponseWriter, r *http.Request) {
 
 func (a *AuthManager) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/login" {
+		if r.URL.Path == "/login" || r.URL.Path == "/favicon.svg" || r.URL.Path == "/favicon.ico" {
 			next.ServeHTTP(w, r)
 			return
 		}

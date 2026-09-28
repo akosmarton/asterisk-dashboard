@@ -13,6 +13,9 @@ import (
 //go:embed page.html
 var pageHTML string
 
+//go:embed favicon.svg
+var faviconSVG []byte
+
 type Server struct {
 	service *service.AsteriskService
 	hub     *Hub
@@ -89,4 +92,10 @@ func (s *Server) HandleWS(w http.ResponseWriter, r *http.Request) {
 		b, _ := json.Marshal(data)
 		return b
 	})
+}
+
+func (s *Server) HandleFavicon(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "image/svg+xml")
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	_, _ = w.Write(faviconSVG)
 }

@@ -107,6 +107,8 @@ func main() {
 
 	mux.HandleFunc("/login", authMgr.HandleLogin)
 	mux.HandleFunc("/logout", authMgr.HandleLogout)
+	mux.HandleFunc("/favicon.svg", webHandler.HandleFavicon)
+	mux.HandleFunc("/favicon.ico", webHandler.HandleFavicon)
 	mux.HandleFunc("/", webHandler.HandleIndex)
 	mux.HandleFunc("/api/data", webHandler.HandleData)
 	mux.HandleFunc("/ws", webHandler.HandleWS)
