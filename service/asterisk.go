@@ -139,7 +139,8 @@ func (s *AsteriskService) Refresh() error {
 	uptimeLines, _ := s.amiClient.Command("core show uptime")
 	for _, l := range uptimeLines {
 		if strings.HasPrefix(l, "System uptime:") {
-			data.Global.Uptime = strings.TrimSpace(strings.TrimPrefix(l, "System uptime:"))
+			rawUptime := strings.TrimSpace(strings.TrimPrefix(l, "System uptime:"))
+			data.Global.Uptime = FormatShortUptime(rawUptime)
 			break
 		}
 	}
@@ -270,7 +271,7 @@ func (s *AsteriskService) Refresh() error {
 					Type:    "SIP Trunk Endpoint",
 					Status:  ep.Devicestate,
 					Address: ep.Aor,
-					Details: fmt.Sprintf("Csatornák: %s", ep.ActiveChannels),
+					Details: fmt.Sprintf("Channels: %s", ep.ActiveChannels),
 				})
 			}
 		}
