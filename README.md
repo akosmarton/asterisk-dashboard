@@ -14,7 +14,7 @@ A high-performance Golang web application that connects to an Asterisk server vi
 
 ## 1. Asterisk AMI Configuration (`/etc/asterisk/manager.conf`)
 
-Ensure AMI is enabled on Asterisk:
+Ensure AMI is enabled on Asterisk and configure a dedicated user with the minimal permissions required by the dashboard:
 
 ```ini
 [general]
@@ -23,9 +23,15 @@ port = 5038
 bindaddr = 0.0.0.0
 
 [admin]
-secret = admin
-read = system,call,log,verbose,command,agent,user,config
-write = system,call,log,verbose,command,agent,user,config
+secret = your_secure_password
+deny = 0.0.0.0/0.0.0.0
+permit = 127.0.0.1/255.255.255.255   ; Or the IP/subnet where the dashboard runs
+
+; Required AMI permissions:
+; - read: call (channel & call events), system (endpoint & device state events), cdr (call detail records)
+; - write: command (Asterisk CLI queries: uptime, contacts), system (PJSIP endpoints/registrations), call (active channel listings)
+read = call,system,cdr
+write = command,system,call
 ```
 
 Reload AMI:
