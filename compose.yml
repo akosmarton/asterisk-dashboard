@@ -12,3 +12,5 @@ services:
       - AMI_PORT=${AMI_PORT:-5038}
       - AMI_USER=${AMI_USER:-admin}
       - AMI_PASS=${AMI_PASS:-admin}
+      - AUTH_USER=${AUTH_USER:-admin}
+      - AUTH_PASS=${AUTH_PASS:-admin}

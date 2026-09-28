@@ -27,6 +27,8 @@ func main() {
 	amiUser := flag.String("ami-user", getEnvOrDefault("AMI_USER", "admin"), "AMI username")
 	amiPass := flag.String("ami-pass", getEnvOrDefault("AMI_PASS", "admin"), "AMI password")
 	webPort := flag.String("http", getEnvOrDefault("HTTP_PORT", "8080"), "Web server port")
+	authUser := flag.String("auth-user", getEnvOrDefault("AUTH_USER", "admin"), "Dashboard username")
+	authPass := flag.String("auth-pass", getEnvOrDefault("AUTH_PASS", "admin"), "Dashboard password")
 	flag.Parse()
 
 	amiAddr := fmt.Sprintf("%s:%s", *amiHost, *amiPort)
@@ -99,14 +101,21 @@ func main() {
 		}
 	}()
 
+	mux := http.NewServeMux()
 	webHandler := web.NewServer(srv, hub)
-	http.HandleFunc("/", webHandler.HandleIndex)
-	http.HandleFunc("/api/data", webHandler.HandleData)
-	http.HandleFunc("/ws", webHandler.HandleWS)
+	authMgr := web.NewAuthManager(*authUser, *authPass)
+
+	mux.HandleFunc("/login", authMgr.HandleLogin)
+	mux.HandleFunc("/logout", authMgr.HandleLogout)
+	mux.HandleFunc("/", webHandler.HandleIndex)
+	mux.HandleFunc("/api/data", webHandler.HandleData)
+	mux.HandleFunc("/ws", webHandler.HandleWS)
+
+	handler := authMgr.Middleware(mux)
 
 	listenAddr := fmt.Sprintf(":%s", *webPort)
-	log.Printf("Asterisk Web Dashboard live at: http://localhost%s", listenAddr)
-	if err := http.ListenAndServe(listenAddr, nil); err != nil {
+	log.Printf("Asterisk Web Dashboard live at: http://localhost%s (auth user: %s)", listenAddr, *authUser)
+	if err := http.ListenAndServe(listenAddr, handler); err != nil {
 		log.Fatalf("Web server stopped: %v", err)
 	}
 }

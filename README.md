@@ -44,7 +44,7 @@ asterisk -rx "manager reload"
 
 ### Using Custom CLI Options:
 ```bash
-./asterisk-dashboard -ami-host localhost -ami-port 5038 -ami-user admin -ami-pass admin -http 8080
+./asterisk-dashboard -ami-host localhost -ami-port 5038 -ami-user admin -ami-pass admin -http 8080 -auth-user admin -auth-pass secret
 ```
 
 ### Using Environment Variables:
@@ -54,6 +54,8 @@ export AMI_PORT=5038
 export AMI_USER=admin
 export AMI_PASS=admin
 export HTTP_PORT=8080
+export AUTH_USER=admin
+export AUTH_PASS=admin
 
 ./asterisk-dashboard
 ```
@@ -72,6 +74,8 @@ docker run -d -p 8080:8080 \
   -e AMI_PORT=5038 \
   -e AMI_USER=admin \
   -e AMI_PASS=admin \
+  -e AUTH_USER=admin \
+  -e AUTH_PASS=admin \
   --name asterisk-dashboard \
   asterisk-dashboard
 ```
