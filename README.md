@@ -81,3 +81,16 @@ docker run -d -p 8080:8080 \
 ```
 
 Open your browser at: **http://localhost:8080**
+
+---
+
+## Credits
+
+This project and its codebase were written by **Gemini 3.8 Flash**.
+
+---
+
+## License
+
+This project is licensed under the [MIT License](LICENSE).
+
