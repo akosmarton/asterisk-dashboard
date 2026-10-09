@@ -2,6 +2,7 @@ package service
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -219,26 +220,26 @@ func (s *AsteriskService) Refresh() error {
 		}
 	}
 
-	// 6. Fetch Contacts via "pjsip show contacts" CLI
-	contactLines, _ := s.amiClient.Command("pjsip show contacts")
-	for _, l := range contactLines {
-		l = strings.TrimSpace(l)
-		if strings.HasPrefix(l, "Contact:") {
-			if strings.Contains(l, "<Aor/ContactUri") {
-				continue
-			}
-			fields := strings.Fields(l)
-			if len(fields) >= 4 {
-				c := ContactInfo{
-					ObjectName: fields[1],
-					Status:     fields[3],
-				}
-				if len(fields) >= 5 {
-					c.Roundtrip = fields[4] + " ms"
-				}
-				data.Contacts = append(data.Contacts, c)
-			}
+	// 6. Fetch PJSIP Contacts. Not via the "pjsip show contacts" CLI: that
+	// prints a fixed-width table and cuts the Contact column at ~46 characters,
+	// which truncates the IPv6 URIs mid-address. The action's ContactList
+	// events carry the full Uri plus the endpoint the contact belongs to.
+	contactEvents, _ := s.amiClient.SendActionWithEvents("PJSIPShowContacts", nil, "ContactListComplete")
+	for _, ev := range contactEvents {
+		uri := ev.Headers["uri"]
+		if !strings.EqualFold(ev.Headers["event"], "ContactList") || uri == "" {
+			continue
 		}
+
+		c := ContactInfo{
+			ObjectName: ev.Headers["endpoint"] + "/" + uri,
+			URI:        uri,
+			Status:     ev.Headers["status"],
+		}
+		if usec, err := strconv.Atoi(ev.Headers["roundtripusec"]); err == nil {
+			c.Roundtrip = fmt.Sprintf("%.3f ms", float64(usec)/1000)
+		}
+		data.Contacts = append(data.Contacts, c)
 	}
 
 	// 7. Fetch Outbound Registrations (Trunks)

@@ -75,6 +75,11 @@ ui/src/lib/components/  # Sidebar, Topbar, MetricCard, DataTable, LoginView, Bra
 - **`DashboardData` (`service/asterisk.go`) is the contract** for `/api/data` and every WebSocket
   message; `ui/src/lib/types.ts` mirrors it. Change a Go struct and update `types.ts` in the same
   change, or the SPA reads `undefined`.
+- **Read state from AMI actions, not from Asterisk's CLI text output.** The CLI renders fixed-width
+  tables and cuts long columns: `pjsip show contacts` truncated every Contact column at ~46
+  characters, which silently clipped IPv6 URIs mid-address (the action's `ContactList` events carry
+  the full `Uri`). The only CLI calls left are `core show uptime` and `core show channels count`,
+  whose values are short by nature.
 - **Badge/label rules live in the SPA** (`ui/src/lib/badges.ts`), used by every table. The Go
   template funcs that duplicated them are gone — do not reintroduce a second copy, and do not add a
   Tailwind safelist for server-side class names.
