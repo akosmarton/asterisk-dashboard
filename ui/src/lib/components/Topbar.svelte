@@ -39,8 +39,13 @@
 
     <div class="dropdown dropdown-end">
       <div tabindex="0" role="button" class="btn btn-ghost btn-circle avatar" aria-label="Account menu">
-        <div class="bg-primary text-primary-content w-8 rounded-full">
-          <span class="flex h-full items-center justify-center text-xs font-semibold">AD</span>
+        <div class="bg-primary text-primary-content grid w-8 place-items-center rounded-full">
+          <!-- One user is supported (a single AUTH_USER pair), so this is a plain
+               user icon rather than initials that would never change. -->
+          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" class="size-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" />
+            <circle cx="12" cy="7" r="4" />
+          </svg>
         </div>
       </div>
       <!-- daisyUI's dropdown needs the focusable content element; role="menu" is not set on it. -->
