@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32" role="img" aria-label="Asterisk Dashboard">
+  <!-- The Asterisk orange (#f68f1e, the fill of the official mark) in a flat
+       rounded tile, with the mark in the same dark colour the app's own tiles
+       put on the brand fill. No gradient: those tiles are flat too, and two
+       colours keep the six points crisp at 16px. -->
+  <rect width="32" height="32" rx="7" fill="#f68f1e"/>
+  <!-- Six-armed asterisk: three beams through the centre, round-capped (1.7px
+       strokes at 16px). -->
+  <g fill="none" stroke="#351e08" stroke-width="3.4" stroke-linecap="round">
+    <path d="M16 6.6v18.8"/>
+    <path d="m7.86 11.3 16.28 9.4"/>
+    <path d="m24.14 11.3-16.28 9.4"/>
+  </g>
+</svg>

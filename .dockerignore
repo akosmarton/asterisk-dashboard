@@ -1,0 +1,17 @@
+# Ignore Git
+.git
+.gitignore
+
+# Ignore build artifacts and local files
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+asterisk-dashboard
+*.log
+
+# Frontend: the image installs and builds the frontend itself. The host copies
+# are either platform-specific (node_modules) or stale build output (dist/).
+ui/node_modules
+ui/dist

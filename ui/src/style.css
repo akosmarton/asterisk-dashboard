@@ -1,0 +1,157 @@
+/* Tailwind + daisyUI entry for the SPA. Vite processes it into ui/dist/app.css
+ * and rewrites the <link> in ui/index.html; it is never imported from JS (that
+ * would paint the page unstyled first).
+ *
+ * source(none): no automatic content detection. Without it Tailwind would also
+ * scan README.md, and English prose ("table", "form", "list") would pull extra
+ * daisyUI components into the bundle. */
+@import "tailwindcss" source(none);
+
+/* The class names live in the SPA: the shell (index.html) and the components. */
+@source "../index.html";
+@source "./**/*.{svelte,ts}";
+
+@plugin "daisyui" {
+  themes: light --default, dark --prefersdark;
+  logs: false;
+}
+
+/* Brand colors: the Asterisk orange, plus surfaces tuned to match it.
+ *
+ * daisyUI defines its --color-* variables on the [data-theme=…] element (the
+ * default theme on :root). These rules have the same specificity but come
+ * later, so they win — that way the original daisyUI purple never comes back
+ * when the theme changes.
+ *
+ * The Asterisk project has a single brand color (#f68f1e — the fill of the
+ * official mark), so primary/secondary/accent are one hue (≈60) at three
+ * lightness steps — a ramp, not three independent brand colors: accent is a
+ * light tint for soft surfaces, secondary a darker shade, dark enough to carry
+ * white text. Do not use primary and secondary as co-equal accents side by
+ * side: they are 2.6:1 apart (WCAG 1.4.11 wants 3:1), so the pair reads as one
+ * color, not two roles. For a quieter second emphasis use `btn-neutral`/
+ * `btn-ghost`; against the accent tint, secondary does reach 4.6:1.
+ *
+ * The bright fill takes *dark* content (6.6:1) rather than white (2.4:1),
+ * which is why --color-primary-content is a near-black — and why the brand
+ * orange is not usable as text on a light surface; --color-primary-text below
+ * holds the text-safe shade. */
+:root,
+[data-theme] {
+  --color-primary: oklch(74.5% 0.166 60.4); /* #f68f1e */
+  --color-primary-content: oklch(26% 0.05 60.4); /* #351e08 */
+  --color-secondary: oklch(50% 0.115 60.4); /* #915104 — shade of primary, not a brand color */
+  --color-secondary-content: oklch(100% 0 0); /* #ffffff */
+  --color-accent: oklch(90% 0.06 60.4); /* #fdd6b7 */
+  --color-accent-content: oklch(35% 0.075 60.4); /* #563008 */
+}
+
+/* Surfaces — these differ per theme. */
+:root,
+[data-theme='light'] {
+  --color-base-100: oklch(99% 0.004 60.4); /* #fefbf9 */
+  --color-base-200: oklch(96.5% 0.008 60.4); /* #f8f2ee */
+  --color-base-300: oklch(92.5% 0.012 60.4); /* #ece5de */
+  --color-base-content: oklch(27.9% 0.015 60.4); /* #2e2721 — 14.2:1 */
+}
+
+[data-theme='dark'] {
+  --color-base-100: oklch(24.9% 0.012 60.4); /* #26201c */
+  --color-base-200: oklch(22.9% 0.011 60.4); /* #211c18 */
+  --color-base-300: oklch(31% 0.014 60.4); /* #362f29 */
+  --color-base-content: oklch(93.3% 0.007 60.4); /* #ece8e4 — 13.2:1 */
+}
+
+/* Text-safe semantic colors.
+ *
+ * daisyUI's --color-success/warning/error are fill colors (--color-success is
+ * #00d390 in both themes): fine as text on a dark surface, but 1.7–2.8:1 on a
+ * light one. These tokens hold a text-safe shade per theme and are used by the
+ * .text-* utilities below. Contrast on --color-base-100: light 5.3–7.0:1. */
+:root,
+[data-theme] {
+  --color-success-text: var(--color-success);
+  --color-warning-text: var(--color-warning);
+  --color-error-text: var(--color-error);
+  --color-primary-text: var(--color-primary);
+}
+
+[data-theme='light'] {
+  --color-success-text: oklch(50% 0.13 163); /* 5.31:1 */
+  --color-warning-text: oklch(50% 0.11 75); /* 5.94:1 */
+  --color-error-text: oklch(48% 0.19 22); /* 7.04:1 */
+  --color-primary-text: oklch(48% 0.11 60.4); /* #894c05 — 6.6:1 */
+}
+
+/* daisyUI 5 has no `alert-primary` (only error/success/warning/info).
+ * This mirrors the built-in variants, so it picks up the brand orange. The
+ * text uses the text-safe shade: the fill itself is 2.3:1 on a light surface,
+ * and --color-primary-content would be dark-on-dark in the dark theme. */
+.alert-primary {
+  color: var(--color-primary-text);
+  --alert-border-color: var(--color-primary);
+  --alert-color: var(--color-primary-text);
+}
+
+@layer components {
+  /* Theme switch icon: moon in light mode, sun in dark mode.
+   * The script in the template <head> always sets data-theme. */
+  .theme-icon-sun {
+    display: none;
+  }
+
+  [data-theme='dark'] .theme-icon-sun {
+    display: block;
+  }
+
+  [data-theme='dark'] .theme-icon-moon {
+    display: none;
+  }
+}
+
+@layer utilities {
+  /* daisyUI ships its own component styles in the `utilities` layer, so an
+   * override for them must live here too — a rule in `@layer components` loses
+   * to it regardless of specificity or source order.
+   *
+   * Dimmed text below AA: daisyUI dims .menu-title to base-content/40 (3.3:1
+   * dark / 2.3:1 light), .table th to 4.0:1 on light, and form .label to
+   * base-content/60 (3.97:1 on light). Lift all of them to base-content/70
+   * (7.2 / 5.5:1). */
+  .menu-title,
+  .table th,
+  .label {
+    color: color-mix(in oklab, var(--color-base-content) 70%, transparent);
+  }
+
+  /* Active sidebar item: brand orange instead of daisyUI's neutral (#09090b — a
+   * near-black, identical in both themes). daisyUI reads these two variables for
+   * .menu-active, [aria-current] and :active. The label on the fill is 6.6:1
+   * (white on it would be 2.4:1) and the bar itself is 6.8:1 against the dark
+   * surface, 2.3:1 against the light one, where it reads as a large saturated
+   * field rather than a boundary. */
+  .menu {
+    --menu-active-bg: var(--color-primary);
+    --menu-active-fg: var(--color-primary-content);
+  }
+
+  /* An alert carries its own content color; the ghost close button must inherit
+   * it instead of btn-ghost's base-content (2.4:1 on the error alert in dark). */
+  .alert .btn-ghost {
+    color: inherit;
+  }
+
+  /* Text-safe semantic colors (see above): daisyUI's --color-* are fill colors
+   * and fail as text on a light surface. */
+  .text-success {
+    color: var(--color-success-text);
+  }
+
+  .text-warning {
+    color: var(--color-warning-text);
+  }
+
+  .text-error {
+    color: var(--color-error-text);
+  }
+}

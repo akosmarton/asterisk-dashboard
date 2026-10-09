@@ -1,0 +1,16 @@
+services:
+  asterisk-dashboard:
+    image: docker.io/makos/asterisk-dashboard:latest
+    build:
+      context: .
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      - HTTP_PORT=8080
+      - AMI_HOST=${AMI_HOST:-localhost}
+      - AMI_PORT=${AMI_PORT:-5038}
+      - AMI_USER=${AMI_USER:-admin}
+      - AMI_PASS=${AMI_PASS:-admin}
+      - AUTH_USER=${AUTH_USER:-admin}
+      - AUTH_PASS=${AUTH_PASS:-admin}

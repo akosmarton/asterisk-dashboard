@@ -1,0 +1,10 @@
+# Go binary
+asterisk-dashboard
+
+# Frontend (ui/): build tooling and the Vite build output. The output is
+# embedded into the Go binary by main.go, so it is not committed —
+# `ui/dist/.gitkeep` only exists to keep `//go:embed all:ui/dist` valid on a
+# fresh clone.
+ui/node_modules
+ui/dist/*
+!ui/dist/.gitkeep

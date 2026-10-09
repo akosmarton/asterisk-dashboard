@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en" data-theme="light" class="no-transitions">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Asterisk Dashboard</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <!-- Render-blocking stylesheet. Vite processes it into ui/dist/app.css and
+         rewrites this href; keep it a <link> here rather than importing it from
+         main.ts, which would paint the page unstyled first. -->
+    <link rel="stylesheet" href="/src/style.css" />
+    <script>
+      // Set the theme before the first paint so it does not flash (FOUC).
+      // Keep the key in sync with src/lib/theme.ts.
+      ;(function () {
+        try {
+          var t = localStorage.getItem('asterisk-dashboard:theme')
+          if (!t) {
+            t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+          }
+          document.documentElement.setAttribute('data-theme', t)
+        } catch (e) {}
+      })()
+    </script>
+    <style>
+      /* Critical CSS: paints the canvas before app.css loads, so dark mode does
+       * not flash white (FOUC). The colors mirror --color-base-100 in
+       * src/style.css; color-scheme keeps native UI (scrollbars, inputs) in
+       * step. Keep this in sync with the themes in style.css. */
+      html {
+        background-color: #fefbf9;
+        color-scheme: light;
+      }
+      html[data-theme='dark'] {
+        background-color: #26201c;
+        color-scheme: dark;
+      }
+      /* No transitions during the initial render: before app.css loads every
+       * border-color is currentColor (white in dark mode), so once daisyUI
+       * applies its themed colors any element with a transition would animate
+       * white -> color and flash. main.ts drops the class after the first paint. */
+      html.no-transitions,
+      html.no-transitions *,
+      html.no-transitions *::before,
+      html.no-transitions *::after {
+        transition: none !important;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
