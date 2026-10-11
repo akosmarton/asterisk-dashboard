@@ -243,12 +243,6 @@ itself, so neither Node nor a local frontend build is needed to produce the imag
 
 ---
 
-## Credits
-
-This project and its codebase were written by **Google Gemini**.
-
----
-
 ## License
 
 This project is licensed under the [MIT License](LICENSE).
