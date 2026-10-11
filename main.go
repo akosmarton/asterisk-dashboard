@@ -46,10 +46,35 @@ func main() {
 	amiUser := flag.String("ami-user", getEnvOrDefault("AMI_USER", "admin"), "AMI username")
 	amiPass := flag.String("ami-pass", getEnvOrDefault("AMI_PASS", "admin"), "AMI password")
 	webPort := flag.String("http", getEnvOrDefault("HTTP_PORT", "8080"), "Web server port")
-	authUser := flag.String("auth-user", getEnvOrDefault("AUTH_USER", "admin"), "Dashboard username")
-	authPass := flag.String("auth-pass", getEnvOrDefault("AUTH_PASS", "admin"), "Dashboard password")
+	adminUser := flag.String("admin-user", getEnvOrDefault("ADMIN_USER", ""), "Dashboard username; with -admin-pass enables password sign-in")
+	adminPass := flag.String("admin-pass", getEnvOrDefault("ADMIN_PASSWORD", ""), "Dashboard password; with -admin-user enables password sign-in")
 	devMode := flag.Bool("dev", getEnvOrDefault("DEV", "") != "", "Serve frontend assets from ui/dist on disk instead of the embedded build")
 	flag.Parse()
+
+	// SSO is env-only: the four values are deployment/secret configuration, not
+	// per-run CLI switches.
+	oidcIssuer := os.Getenv("OIDC_ISSUER_URL")
+	oidcClientID := os.Getenv("OIDC_CLIENT_ID")
+	oidcClientSecret := os.Getenv("OIDC_CLIENT_SECRET")
+	oidcAllowed := os.Getenv("OIDC_ALLOWED_EMAILS")
+
+	// Sign-in configuration is validated before anything listens: a half-set
+	// password pair or a half-set OIDC block would otherwise fail silently, at
+	// the first sign-in attempt.
+	oidcSet := oidcIssuer != "" || oidcClientID != "" || oidcClientSecret != "" || oidcAllowed != ""
+	if oidcSet && (oidcIssuer == "" || oidcClientID == "" || oidcClientSecret == "" || oidcAllowed == "") {
+		log.Fatalf("invalid auth configuration: OIDC is partially configured — set all of OIDC_ISSUER_URL, OIDC_CLIENT_ID, OIDC_CLIENT_SECRET and OIDC_ALLOWED_EMAILS, or none of them")
+	}
+	oidcEmails := web.ParseAllowedEmails(oidcAllowed)
+	if oidcSet && len(oidcEmails) == 0 {
+		log.Fatalf("invalid auth configuration: OIDC_ALLOWED_EMAILS lists no email address; an empty allow-list can never mean \"everyone\"")
+	}
+	if (*adminUser == "") != (*adminPass == "") {
+		log.Fatalf("invalid auth configuration: ADMIN_USER and ADMIN_PASSWORD must be set together")
+	}
+	if *adminUser == "" && !oidcSet {
+		log.Println("WARNING: no sign-in method is configured (set ADMIN_USER/ADMIN_PASSWORD and/or the OIDC_* variables); the dashboard is reachable only with an API key in front of it")
+	}
 
 	amiAddr := fmt.Sprintf("%s:%s", *amiHost, *amiPort)
 	log.Printf("Connecting to Asterisk AMI: %s (user: %s)...", amiAddr, *amiUser)
@@ -135,11 +160,28 @@ func main() {
 
 	mux := http.NewServeMux()
 	webHandler := web.NewServer(srv, hub, assets)
-	authMgr := web.NewAuthManager(*authUser, *authPass)
+
+	authCfg := web.AuthConfig{User: *adminUser, Pass: *adminPass}
+	if oidcSet {
+		authCfg.OIDC = &web.OIDCConfig{
+			IssuerURL:     oidcIssuer,
+			ClientID:      oidcClientID,
+			ClientSecret:  oidcClientSecret,
+			AllowedEmails: oidcEmails,
+		}
+	}
+	// Discovery failure is fatal on purpose: a typo'd issuer URL should surface
+	// at boot, not at the first sign-in attempt.
+	authMgr, err := web.NewAuthManager(authCfg)
+	if err != nil {
+		log.Fatalf("auth: %v", err)
+	}
 
 	mux.HandleFunc("/api/session", authMgr.HandleSession)
 	mux.HandleFunc("/api/login", authMgr.HandleLogin)
 	mux.HandleFunc("/api/logout", authMgr.HandleLogout)
+	mux.HandleFunc("/api/oidc/login", authMgr.HandleOIDCLogin)
+	mux.HandleFunc("/api/oidc/callback", authMgr.HandleOIDCCallback)
 	mux.HandleFunc("/api/data", webHandler.HandleData)
 	mux.HandleFunc("/ws", webHandler.HandleWS)
 	mux.HandleFunc("/favicon.svg", webHandler.HandleFavicon)
@@ -152,7 +194,20 @@ func main() {
 	handler := authMgr.Middleware(mux)
 
 	listenAddr := fmt.Sprintf(":%s", *webPort)
-	log.Printf("Asterisk Web Dashboard live at: http://localhost%s (auth user: %s)", listenAddr, *authUser)
+
+	var methods []string
+	if *adminUser != "" {
+		methods = append(methods, "password")
+	}
+	if oidcSet {
+		methods = append(methods, "oidc")
+	}
+	signMethods := "none (locked)"
+	if len(methods) > 0 {
+		signMethods = strings.Join(methods, " + ")
+	}
+
+	log.Printf("Asterisk Web Dashboard live at: http://localhost%s (sign-in: %s)", listenAddr, signMethods)
 	if err := http.ListenAndServe(listenAddr, handler); err != nil {
 		log.Fatalf("Web server stopped: %v", err)
 	}

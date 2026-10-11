@@ -12,7 +12,10 @@ import (
 
 func TestAuthManager(t *testing.T) {
 	mux := http.NewServeMux()
-	authMgr := NewAuthManager("admin", "secret")
+	authMgr, err := NewAuthManager(AuthConfig{User: "admin", Pass: "secret"})
+	if err != nil {
+		t.Fatalf("NewAuthManager: %v", err)
+	}
 
 	mux.HandleFunc("/api/session", authMgr.HandleSession)
 	mux.HandleFunc("/api/login", authMgr.HandleLogin)
@@ -55,21 +58,25 @@ func TestAuthManager(t *testing.T) {
 		return resp
 	}
 
-	// sessionAuthenticated reads /api/session and returns the flag.
-	sessionAuthenticated := func() bool {
+	// sessionInfoOf reads /api/session and returns the decoded response.
+	sessionInfoOf := func() sessionInfo {
 		t.Helper()
 		resp := get("/api/session")
 		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
 			t.Fatalf("GET /api/session: expected 200, got %d", resp.StatusCode)
 		}
-		var body struct {
-			Authenticated bool `json:"authenticated"`
-		}
+		var body sessionInfo
 		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 			t.Fatalf("GET /api/session: bad JSON: %v", err)
 		}
-		return body.Authenticated
+		return body
+	}
+
+	// sessionAuthenticated reads /api/session and returns the flag.
+	sessionAuthenticated := func() bool {
+		t.Helper()
+		return sessionInfoOf().Authenticated
 	}
 
 	// errorMessage reads a JSON error body.
@@ -92,9 +99,16 @@ func TestAuthManager(t *testing.T) {
 	}
 	resp.Body.Close()
 
-	// 2. No session yet.
-	if sessionAuthenticated() {
+	// 2. No session yet — but the enabled sign-in methods are advertised.
+	info := sessionInfoOf()
+	if info.Authenticated {
 		t.Fatal("expected an unauthenticated session before login")
+	}
+	if !info.PasswordLogin || info.OIDCLogin {
+		t.Fatalf("expected password_login only, got %+v", info)
+	}
+	if info.User != nil {
+		t.Fatalf("expected no user before login, got %+v", info.User)
 	}
 
 	// 3. Data endpoints are refused without a session.
@@ -154,9 +168,13 @@ func TestAuthManager(t *testing.T) {
 		t.Errorf("expected cookie path /, got %q", session.Path)
 	}
 
-	// 7. The session is now valid.
+	// 7. The session is now valid, and carries the signed-in identity.
 	if !sessionAuthenticated() {
 		t.Fatal("expected an authenticated session after login")
+	}
+	info = sessionInfoOf()
+	if info.User == nil || info.User.Name != "admin" || info.User.Monogram != "A" {
+		t.Fatalf("expected the admin identity with monogram A, got %+v", info.User)
 	}
 
 	// 8. Data is served with the session.
@@ -190,4 +208,79 @@ func TestAuthManager(t *testing.T) {
 	}
 	_, _ = io.Copy(io.Discard, resp.Body)
 	resp.Body.Close()
+}
+
+// TestAuthManagerWithoutSignInMethod pins the locked state: with no password
+// pair and no OIDC block there is no open mode — nothing authenticates.
+func TestAuthManagerWithoutSignInMethod(t *testing.T) {
+	authMgr, err := NewAuthManager(AuthConfig{})
+	if err != nil {
+		t.Fatalf("NewAuthManager: %v", err)
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/session", authMgr.HandleSession)
+	mux.HandleFunc("/api/login", authMgr.HandleLogin)
+	mux.HandleFunc("/api/oidc/login", authMgr.HandleOIDCLogin)
+	mux.HandleFunc("/api/data", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	})
+
+	ts := httptest.NewServer(authMgr.Middleware(mux))
+	defer ts.Close()
+
+	client := &http.Client{
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+
+	// An empty credential pair must not match an empty configuration.
+	resp, err := client.Post(ts.URL+"/api/login", "application/json", strings.NewReader(`{"username":"","password":""}`))
+	if err != nil {
+		t.Fatalf("POST /api/login failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for an empty credential pair, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	resp, err = client.Get(ts.URL + "/api/data")
+	if err != nil {
+		t.Fatalf("GET /api/data failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for /api/data, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	// SSO is off too, so the entry point bounces back to the login view.
+	resp, err = client.Get(ts.URL + "/api/oidc/login")
+	if err != nil {
+		t.Fatalf("GET /api/oidc/login failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("expected 303 for /api/oidc/login, got %d", resp.StatusCode)
+	}
+	if loc := resp.Header.Get("Location"); loc != "/?auth_error=failed" {
+		t.Fatalf("expected the login view, got %q", loc)
+	}
+}
+
+func TestMonogramOf(t *testing.T) {
+	cases := []struct {
+		name, email, want string
+	}{
+		{"Jane Doe", "jane.doe@example.com", "JD"},
+		{"", "jane.doe@example.com", "JD"},
+		{"admin", "", "A"},
+		{"", "", "?"},
+		{"0123", "", "0"},
+	}
+	for _, c := range cases {
+		if got := monogramOf(c.name, c.email); got != c.want {
+			t.Errorf("monogramOf(%q, %q) = %q, want %q", c.name, c.email, got, c.want)
+		}
+	}
 }

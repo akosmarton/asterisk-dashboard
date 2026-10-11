@@ -34,7 +34,8 @@ frontend verification. Go has `go test ./...` (`service`, `web`).
 ```
 main.go              # flags/env, AMI + service + hub wiring, `//go:embed all:ui/dist`
 web/handler.go       # SPA shell, /api/data, /ws, favicon, /static/ mount
-web/auth.go          # /api/session, /api/login, /api/logout + the auth middleware
+web/auth.go          # sessions + identity, /api/session, /api/login, /api/logout, middleware
+web/oidc.go          # /api/oidc/login, /api/oidc/callback: the PKCE flow + the allow-list
 web/hub.go           # WebSocket broadcast hub
 service/             # state built from AMI events (asterisk.go, history.go, uptime.go)
 ami/                 # AMI protocol: command client, event stream
@@ -66,12 +67,19 @@ ui/src/lib/components/  # Sidebar, Topbar, MetricCard, DataTable, LoginView, Bra
 
 - **Go renders no HTML.** `web/handler.go` serves the same SPA shell for every non-API path; the
   client asks `GET /api/session` and renders the login view or the dashboard itself.
-- **`/api/session`, `/api/login` and `/api/logout` are the only unauthenticated paths.** Everything
-  else under `/api/` and `/ws` answers `401 {"error":"Unauthorized"}` without a session cookie. The
-  cookie is `HttpOnly`; the SPA never sees the token and recovers from a `401`/socket close by
-  returning to the login view.
-- Sessions are an in-memory `map[token]expiry` with a 24 h TTL (`web/auth.go`), so a restart logs
-  everyone out. Don't "fix" that with a persistent store unless asked.
+- **`/api/session`, `/api/login`, `/api/logout`, `/api/oidc/login` and `/api/oidc/callback` are the
+  only unauthenticated paths.** Everything else under `/api/` and `/ws` answers
+  `401 {"error":"Unauthorized"}` without a session cookie. The cookie is `HttpOnly`; the SPA never
+  sees the token and recovers from a `401`/socket close by returning to the login view.
+- **The sign-in rules live in `web/auth.go` / `web/oidc.go`, and `main.go` enforces them at
+  startup.** Password sign-in needs `ADMIN_USER` + `ADMIN_PASSWORD` together (flags
+  `-admin-user`/`-admin-pass`); SSO needs all four `OIDC_*` variables or none; with neither, nobody
+  signs in (there is no open mode) and the server logs a warning. `OIDC_ALLOWED_EMAILS` is the
+  authorization — the ID token only proves the account — so an unlisted address is refused with
+  `/?auth_error=forbidden`, and an empty allow-list is a startup error rather than "everyone".
+- Sessions are an in-memory `map[token]session` (expiry + user identity) with a 24 h TTL
+  (`web/auth.go`), so a restart logs everyone out. Don't "fix" that with a persistent store unless
+  asked.
 - **`DashboardData` (`service/asterisk.go`) is the contract** for `/api/data` and every WebSocket
   message; `ui/src/lib/types.ts` mirrors it. Change a Go struct and update `types.ts` in the same
   change, or the SPA reads `undefined`.

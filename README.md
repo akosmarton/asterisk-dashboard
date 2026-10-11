@@ -38,7 +38,8 @@ ui/                  # the whole Vite project; nothing here is Go
 
 web/                 # Go only: HTTP handlers, auth, WebSocket hub
   handler.go         # SPA shell, /api/data, /ws, favicon
-  auth.go            # /api/session, /api/login, /api/logout + the middleware
+  auth.go            # sessions, /api/session, /api/login, /api/logout + the middleware
+  oidc.go            # /api/oidc/login, /api/oidc/callback: the PKCE flow + the allow-list
   hub.go             # WebSocket broadcast hub
 main.go              # wiring + `//go:embed all:ui/dist`
 ```
@@ -78,16 +79,41 @@ fixed), so a rebuild does not need a manual cache clear.
 
 | Endpoint | Session | Response |
 | --- | --- | --- |
-| `GET /api/session` | no | `{"authenticated": bool}` |
+| `GET /api/session` | no | `{"authenticated": bool, "password_login": bool, "oidc_login": bool, "user": {"name","email","monogram"} \| null}` |
 | `POST /api/login` | no | JSON `{"username","password"}` → `{"ok":true}` + `Set-Cookie`, or `401 {"error"}` |
 | `POST /api/logout` | no | `204`, clears the cookie |
+| `GET /api/oidc/login` | no | `303` to the IdP's authorization endpoint: starts the PKCE flow (or back to `/?auth_error=failed` when SSO is off) |
+| `GET /api/oidc/callback` | no | `303` to `/` on success, else `/?auth_error=failed` or `/?auth_error=forbidden` |
 | `GET /api/data` | yes | the `DashboardData` snapshot (same shape as a WebSocket message) |
 | `GET /ws` | yes | WebSocket: a full snapshot on connect, then on every change |
 | `GET /` and every other path | no | the SPA shell; the client renders the login view itself |
 
-`/api/session`, `/api/login` and `/api/logout` are the only unauthenticated API paths; everything
-else under `/api/` and `/ws` answers `401 {"error":"Unauthorized"}` without a session. The session
-cookie is `HttpOnly`, so the token never reaches JavaScript.
+`/api/session`, `/api/login`, `/api/logout`, `/api/oidc/login` and `/api/oidc/callback` are the only
+unauthenticated API paths; everything else under `/api/` and `/ws` answers
+`401 {"error":"Unauthorized"}` without a session. The session cookie is `HttpOnly`, so the token
+never reaches JavaScript.
+
+### Sign-in
+
+Two methods, both optional, and neither of them has a default:
+
+| Method | Configuration | Notes |
+| --- | --- | --- |
+| Password | `ADMIN_USER` + `ADMIN_PASSWORD` (flags `-admin-user`/`-admin-pass`) | Must be set together; one without the other is a startup error. |
+| SSO (OIDC, PKCE) | `OIDC_ISSUER_URL`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `OIDC_ALLOWED_EMAILS` | All four together or none: a partial block is a startup error. |
+
+With **no** method configured the server logs a warning at startup and the dashboard is reachable
+only with an API key in front of it — the app itself checks none: nobody can sign in, and the login
+card says so.
+
+SSO uses the authorization code flow with PKCE (`S256`), a single-use `state` and the provider's
+discovery document, fetched at startup (an unreachable or mistyped issuer URL fails the boot). The
+ID token only proves the account; **`OIDC_ALLOWED_EMAILS` is the authorization**. The list is
+comma-separated and case-insensitive; an address that is not on it (or an `email_verified: false`
+claim) is refused with `/?auth_error=forbidden`, and an empty list is a startup error because it can
+never mean "everyone". The `redirect_uri` is derived from the request (`X-Forwarded-Proto` and
+`Host`), so a reverse proxy must pass the public host through; register
+`<public base>/api/oidc/callback` at the IdP.
 
 ### Frontend notes
 
@@ -163,7 +189,7 @@ asterisk -rx "manager reload"
 
 ### Using Custom CLI Options:
 ```bash
-./asterisk-dashboard -ami-host localhost -ami-port 5038 -ami-user admin -ami-pass admin -http 8080 -auth-user admin -auth-pass secret
+./asterisk-dashboard -ami-host localhost -ami-port 5038 -ami-user admin -ami-pass admin -http 8080 -admin-user admin -admin-pass secret
 ```
 
 `-dev` (or `DEV=1`) serves the frontend assets from `ui/dist` on disk instead of the embedded
@@ -177,8 +203,14 @@ export AMI_PORT=5038
 export AMI_USER=admin
 export AMI_PASS=admin
 export HTTP_PORT=8080
-export AUTH_USER=admin
-export AUTH_PASS=admin
+export ADMIN_USER=admin
+export ADMIN_PASSWORD=admin
+
+# Optional SSO — all four together, or none at all (see Sign-in)
+export OIDC_ISSUER_URL=https://id.example.com
+export OIDC_CLIENT_ID=asterisk-dashboard
+export OIDC_CLIENT_SECRET=your_client_secret
+export OIDC_ALLOWED_EMAILS=you@example.com,oncall@example.com
 
 ./asterisk-dashboard
 ```
@@ -197,8 +229,8 @@ docker run -d -p 8080:8080 \
   -e AMI_PORT=5038 \
   -e AMI_USER=admin \
   -e AMI_PASS=admin \
-  -e AUTH_USER=admin \
-  -e AUTH_PASS=admin \
+  -e ADMIN_USER=admin \
+  -e ADMIN_PASSWORD=admin \
   --name asterisk-dashboard \
   asterisk-dashboard
 ```

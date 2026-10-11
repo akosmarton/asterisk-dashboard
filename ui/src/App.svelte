@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte'
 
-  import { connectDashboardSocket, getData, getSession, logout } from './lib/api'
+  import { connectDashboardSocket, getData, getSession, logout, type SessionResponse } from './lib/api'
   import { getBadgeClass, getDispositionBadgeClass } from './lib/badges'
   import { initTheme } from './lib/theme'
   import type { DashboardData } from './lib/types'
@@ -27,13 +27,17 @@
   let data = $state<DashboardData | null>(null)
   let socketOpen = $state(false)
   let activeId = $state<NavId>('overview')
+  // The whole /api/session response: the sign-in methods the login view offers
+  // and the identity behind the account button.
+  let session = $state<SessionResponse | null>(null)
 
   initTheme()
 
   onMount(() => {
     getSession()
-      .then((session) => {
-        view = session.authenticated ? 'signed-in' : 'signed-out'
+      .then((s) => {
+        session = s
+        view = s.authenticated ? 'signed-in' : 'signed-out'
       })
       .catch(() => {
         view = 'signed-out'
@@ -66,8 +70,9 @@
         // would sit behind an "Offline" badge forever. Changing the view stops
         // the reconnect loop through this effect's cleanup.
         getSession()
-          .then((session) => {
-            if (!cancelled && !session.authenticated) view = 'signed-out'
+          .then((s) => {
+            session = s
+            if (!cancelled && !s.authenticated) view = 'signed-out'
           })
           .catch(() => {})
       },
@@ -115,8 +120,11 @@
     view = 'signed-out'
   }
 
-  function handleLoginSuccess(): void {
+  async function handleLoginSuccess(): Promise<void> {
     data = null
+    // Re-read the session so the account button shows the identity just signed
+    // in as; the login response only says that it worked.
+    session = await getSession().catch(() => session)
     view = 'signed-in'
   }
 
@@ -138,14 +146,18 @@
 </script>
 
 {#if view === 'signed-out'}
-  <LoginView onSuccess={handleLoginSuccess} />
+  <LoginView
+    password={session?.password_login ?? false}
+    oidc={session?.oidc_login ?? false}
+    onSuccess={handleLoginSuccess}
+  />
 {:else if view === 'signed-in'}
   <div class="drawer lg:drawer-open">
     <input id="app-drawer" type="checkbox" class="drawer-toggle" />
 
     <!-- ================= Page content ================= -->
     <div class="drawer-content flex min-h-dvh flex-col">
-      <Topbar title={activeLabel} {online} onSignOut={handleSignOut} />
+      <Topbar title={activeLabel} {online} user={session?.user ?? null} onSignOut={handleSignOut} />
 
       <!-- Main content -->
       <main class="flex-1 p-4 sm:p-6">

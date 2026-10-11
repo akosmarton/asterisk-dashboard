@@ -1,11 +1,22 @@
 import type { DashboardData } from './types'
 
+export interface SessionUser {
+  name?: string
+  email?: string
+  monogram: string
+}
+
 export interface SessionResponse {
   authenticated: boolean
+  password_login: boolean
+  oidc_login: boolean
+  user: SessionUser | null
 }
 
 /**
- * GET /api/session -> 200 {"authenticated": boolean} (never 401).
+ * GET /api/session -> 200 {"authenticated", "password_login", "oidc_login",
+ * "user"} (never 401). The two *_login flags say which sign-in methods the
+ * server offers; "user" is the signed-in identity behind the account button.
  */
 export async function getSession(): Promise<SessionResponse> {
   const res = await fetch('/api/session')

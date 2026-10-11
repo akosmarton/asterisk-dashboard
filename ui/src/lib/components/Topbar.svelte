@@ -1,11 +1,19 @@
 <script lang="ts">
+  import type { SessionUser } from '../api'
+
   interface Props {
     title: string
     online: boolean
+    user: SessionUser | null
     onSignOut: () => void
   }
 
-  let { title, online, onSignOut }: Props = $props()
+  let { title, online, user, onSignOut }: Props = $props()
+
+  // The account menu names the identity behind the button: the display name
+  // when the provider sent one, otherwise the address.
+  const accountName = $derived(user?.name || user?.email || '')
+  const accountEmail = $derived(user?.name && user?.email ? user.email : '')
 </script>
 
 <header class="navbar bg-base-100 border-base-300 sticky top-0 z-30 min-h-16 border-b px-2 sm:px-4">
@@ -40,19 +48,24 @@
     <div class="dropdown dropdown-end">
       <div tabindex="0" role="button" class="btn btn-ghost btn-circle avatar" aria-label="Account menu">
         <div class="bg-primary text-primary-content grid w-8 place-items-center rounded-full">
-          <!-- One user is supported (a single AUTH_USER pair), so this is a plain
-               user icon rather than initials that would never change. -->
-          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" class="size-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" />
-            <circle cx="12" cy="7" r="4" />
-          </svg>
+          <!-- The initials come from the signed-in identity: the password user
+               name, or the name/email of the OIDC account. -->
+          <span class="text-xs font-semibold select-none">{user?.monogram ?? '?'}</span>
         </div>
       </div>
       <!-- daisyUI's dropdown needs the focusable content element; role="menu" is not set on it. -->
       <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-      <ul tabindex="0" class="dropdown-content menu bg-base-100 rounded-box border-base-300 z-40 mt-2 w-52 border p-2 shadow-lg">
-        <li><button type="button" onclick={onSignOut}>Sign out</button></li>
-      </ul>
+      <div tabindex="0" class="dropdown-content menu bg-base-100 rounded-box border-base-300 z-40 mt-2 w-52 border p-2 shadow-lg">
+        <div class="border-base-300 mb-1 border-b px-2 pt-1 pb-2">
+          <p class="truncate text-sm font-semibold">{accountName}</p>
+          {#if accountEmail}
+            <p class="text-base-content/70 truncate text-xs">{accountEmail}</p>
+          {/if}
+        </div>
+        <ul>
+          <li><button type="button" onclick={onSignOut}>Sign out</button></li>
+        </ul>
+      </div>
     </div>
   </div>
 </header>
