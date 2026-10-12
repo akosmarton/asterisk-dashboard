@@ -103,6 +103,15 @@ func (c *Client) Connect() error {
 	return nil
 }
 
+// IsConnected reports whether the client currently holds a live connection.
+// SendAction/Command/readMessage close the connection and set c.conn = nil on
+// any error, so this flips to false as soon as the connection is lost.
+func (c *Client) IsConnected() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.conn != nil
+}
+
 func (c *Client) Close() {
 	c.mu.Lock()
 	defer c.mu.Unlock()

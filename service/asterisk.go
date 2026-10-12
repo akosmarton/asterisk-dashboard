@@ -74,8 +74,13 @@ type AsteriskService struct {
 	mu        sync.RWMutex
 	lastData  DashboardData
 
+	// epConfigCache is read and written by getEndpointConfig, which Refresh
+	// calls from two goroutines at once (the 2s command loop and the AMI event
+	// handler in main.go). It needs its own lock: s.mu only guards lastData.
 	epConfigCache map[string]struct{ context, allow string }
-	tracker       *CallTracker
+	epCacheMu     sync.Mutex
+
+	tracker *CallTracker
 }
 
 func NewAsteriskService(client *ami.Client) *AsteriskService {
@@ -96,7 +101,31 @@ func (s *AsteriskService) GetData() DashboardData {
 	return s.lastData
 }
 
+// Refresh rebuilds the dashboard snapshot from AMI. CoreStatus is the liveness
+// probe: if it fails, AMI is unreachable, so the last good snapshot is
+// republished with Status "Offline" — its version, uptime, counters and lists
+// preserved and its LastUpdated left untouched, so "last updated" stops
+// advancing — and a non-nil error is returned. Callers must broadcast
+// GetData() even on error, so the UI shows the offline state instead of
+// keeping a stale "Online".
 func (s *AsteriskService) Refresh() error {
+	coreStatus, err := s.amiClient.SendAction("CoreStatus", nil)
+	if err != nil || coreStatus == nil {
+		if err == nil {
+			err = fmt.Errorf("empty CoreStatus response")
+		}
+		s.mu.Lock()
+		stale := s.lastData
+		stale.Global.Status = "Offline"
+		s.lastData = stale
+		s.mu.Unlock()
+		return fmt.Errorf("AMI unreachable: %w", err)
+	}
+
+	// Fresh snapshot. Identity fields that a single AMI call may not have
+	// answered yet start from the last known values rather than fabrications
+	// like a hardcoded version.
+	prev := s.GetData()
 	data := DashboardData{
 		Global: GlobalState{
 			LastUpdated:    time.Now().Format("2006-01-02 15:04:05"),
@@ -104,8 +133,9 @@ func (s *AsteriskService) Refresh() error {
 			ActiveCalls:    "0",
 			ActiveChannels: "0",
 			CallsProcessed: "0",
-			Uptime:         "N/A",
-			Version:        "Asterisk 23",
+			Uptime:         prev.Global.Uptime,
+			Version:        prev.Global.Version,
+			ReloadTime:     prev.Global.ReloadTime,
 		},
 		ActiveChannels: make([]ActiveChannelInfo, 0),
 		Endpoints:      make([]EndpointInfo, 0),
@@ -114,18 +144,15 @@ func (s *AsteriskService) Refresh() error {
 		CallHistory:    s.tracker.GetHistory(),
 	}
 
-	// 1. CoreStatus
-	coreStatus, err := s.amiClient.SendAction("CoreStatus", nil)
-	if err == nil && coreStatus != nil {
-		if v, ok := coreStatus.Headers["corecurrentcalls"]; ok {
-			data.Global.ActiveCalls = v
-		}
-		if v, ok := coreStatus.Headers["coreprocessedcalls"]; ok {
-			data.Global.CallsProcessed = v
-		}
-		if v, ok := coreStatus.Headers["corereloadtime"]; ok {
-			data.Global.ReloadTime = v
-		}
+	// 1. CoreStatus (already fetched above as the liveness probe)
+	if v, ok := coreStatus.Headers["corecurrentcalls"]; ok {
+		data.Global.ActiveCalls = v
+	}
+	if v, ok := coreStatus.Headers["coreprocessedcalls"]; ok {
+		data.Global.CallsProcessed = v
+	}
+	if v, ok := coreStatus.Headers["corereloadtime"]; ok {
+		data.Global.ReloadTime = v
 	}
 
 	// 2. CoreSettings for exact Asterisk Version
@@ -286,7 +313,10 @@ func (s *AsteriskService) Refresh() error {
 }
 
 func (s *AsteriskService) getEndpointConfig(name string) (string, string) {
-	if cfg, ok := s.epConfigCache[name]; ok && cfg.context != "" {
+	s.epCacheMu.Lock()
+	cfg, ok := s.epConfigCache[name]
+	s.epCacheMu.Unlock()
+	if ok && cfg.context != "" {
 		return cfg.context, cfg.allow
 	}
 
@@ -297,7 +327,9 @@ func (s *AsteriskService) getEndpointConfig(name string) (string, string) {
 				ctx := dev.Headers["context"]
 				allow := dev.Headers["allow"]
 				allow = strings.Trim(allow, "()")
+				s.epCacheMu.Lock()
 				s.epConfigCache[name] = struct{ context, allow string }{context: ctx, allow: allow}
+				s.epCacheMu.Unlock()
 				return ctx, allow
 			}
 		}

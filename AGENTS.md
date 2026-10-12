@@ -91,6 +91,14 @@ ui/src/lib/components/  # Sidebar, Topbar, MetricCard, DataTable, LoginView, Bra
 - **Badge/label rules live in the SPA** (`ui/src/lib/badges.ts`), used by every table. The Go
   template funcs that duplicated them are gone — do not reintroduce a second copy, and do not add a
   Tailwind safelist for server-side class names.
+- **The WebSocket hub is single-writer per client** (own writer goroutine + bounded drop-oldest
+  queue): `Broadcast` must never block its caller and `HandleWS` must not write to the connection
+  directly — the old concurrent write panicked in `Hub.Run` and killed the process.
+- **`service.Refresh()` is the AMI liveness probe**: on failure it republishes the last good
+  snapshot with `Status: "Offline"` and a frozen `LastUpdated` and returns an error; callers must
+  broadcast on both paths so the badge flips instead of showing fabricated zeros.
+- **`epConfigCache` holds its own lock** because `Refresh()` runs concurrently from the 2 s command
+  loop and the AMI event handler.
 
 ## Frontend conventions and gotchas
 

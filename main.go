@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"asterisk-dashboard/ami"
@@ -88,11 +89,40 @@ func main() {
 	hub := web.NewHub()
 	go hub.Run()
 
-	// Trigger refresh and broadcast to all connected WebSocket clients
+	// AMI connectivity is logged on transitions only. The event boot burst
+	// triggers refreshAndBroadcast once per event, so logging every failure
+	// would spam one line per event for the whole re-dial window.
+	var amiState struct {
+		mu        sync.Mutex
+		status    string
+		offlineAt time.Time
+	}
+
+	// Trigger refresh and broadcast to all connected WebSocket clients. A
+	// failed refresh is broadcast too: Refresh() republishes the last good
+	// snapshot with Status "Offline", so the badge flips instead of the UI
+	// silently keeping a stale "Online".
 	refreshAndBroadcast := func() {
-		if err := srv.Refresh(); err == nil {
-			hub.Broadcast(srv.GetData())
+		err := srv.Refresh()
+
+		amiState.mu.Lock()
+		switch {
+		case err != nil && amiState.status != "Offline":
+			amiState.status = "Offline"
+			amiState.offlineAt = time.Now()
+			log.Printf("[AMI] Offline: %v", err)
+		case err == nil && amiState.status != "Online":
+			if amiState.offlineAt.IsZero() {
+				log.Println("[AMI] Online.")
+			} else {
+				log.Printf("[AMI] Back online after %s.", time.Since(amiState.offlineAt).Round(time.Second))
+			}
+			amiState.status = "Online"
+			amiState.offlineAt = time.Time{}
 		}
+		amiState.mu.Unlock()
+
+		hub.Broadcast(srv.GetData())
 	}
 
 	// 1. Dedicated AMI Event Stream goroutine (instant reactivity)
@@ -141,6 +171,13 @@ func main() {
 
 			for {
 				refreshAndBroadcast()
+				// A lost connection drops back to the outer loop, which
+				// re-dials (with its 5s backoff). Without this the loop below
+				// would spin forever against a nil connection and the command
+				// client would never reconnect after an Asterisk restart.
+				if !cmdClient.IsConnected() {
+					break
+				}
 				time.Sleep(2 * time.Second)
 			}
 		}
