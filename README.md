@@ -7,7 +7,7 @@ A high-performance Golang web application that connects to an Asterisk server vi
 - **Call History:** Real-time tracked call history for calls made during application runtime (start time, caller ID, destination, disposition status, total duration, billable duration, and channel).
 - **PJSIP Endpoints:** Endpoint IDs, live device state (`Not in use`, `In use`, `Unavailable`), context, and negotiated codecs.
 - **PJSIP Contacts:** Live registered SIP contacts, URIs, availability status, and RTT roundtrip latency.
-- **Trunks & Outbound Registrations:** PJSIP trunk statuses and SIP provider registrations.
+- **Trunks & Outbound Registrations:** PJSIP trunk statuses, SIP provider registrations, and the trunk's RTT roundtrip latency.
 - **Global States:** Asterisk version, system uptime, active calls and channel counts.
 
 ---

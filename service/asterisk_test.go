@@ -16,7 +16,8 @@ import (
 // testAMI is a minimal in-process Asterisk AMI server: enough for Refresh() and
 // getEndpointConfig(). PJSIPShowEndpoints answers with a fresh endpoint name on
 // every query, so a repeated Refresh() always misses (and therefore writes) the
-// per-endpoint config cache.
+// per-endpoint config cache. It also reports the trunk endpoint wavecom, whose
+// contact only the endpoint listing knows about.
 type testAMI struct {
 	ln net.Listener
 	ep int64
@@ -76,17 +77,35 @@ func (s *testAMI) serve(c net.Conn) {
 			name := fmt.Sprintf("ep-%d", atomic.AddInt64(&s.ep, 1))
 			_, _ = fmt.Fprintf(c, "Response: Success\r\nActionID: %s\r\n\r\n"+
 				"Event: EndpointList\r\nActionID: %s\r\nObjectName: %s\r\nDeviceState: Not in use\r\nActiveChannels: 0\r\nAor: %s\r\n\r\n"+
-				"Event: EndpointListComplete\r\nActionID: %s\r\n\r\n", id, id, name, name, id)
+				"Event: EndpointList\r\nActionID: %s\r\nObjectName: wavecom\r\nDeviceState: Not in use\r\nActiveChannels: 0\r\nAor: wavecom\r\n\r\n"+
+				"Event: EndpointListComplete\r\nActionID: %s\r\n\r\n", id, id, name, name, id, id)
 		case "pjsipshowendpoint":
-			_, _ = fmt.Fprintf(c, "Response: Success\r\nActionID: %s\r\n\r\n"+
-				"Event: EndpointDetail\r\nActionID: %s\r\nObjectName: %s\r\nContext: from-internal\r\nAllow: (ulaw)\r\n\r\n"+
-				"Event: EndpointDetailComplete\r\nActionID: %s\r\n\r\n", id, id, h["endpoint"], id)
+			detail := fmt.Sprintf("Event: EndpointDetail\r\nActionID: %s\r\nObjectName: %s\r\nContext: from-internal\r\nAllow: (ulaw)\r\n\r\n",
+				id, h["endpoint"])
+			if h["endpoint"] == "wavecom" {
+				// A trunk's contact is configuration: PJSIPShowContacts does not
+				// report it, the endpoint does.
+				detail += fmt.Sprintf("Event: AorDetail\r\nActionID: %s\r\nObjectName: wavecom\r\n"+
+					"Contacts: wavecom/sip:voip.wavecom.ee\r\n\r\n"+
+					"Event: ContactStatusDetail\r\nActionID: %s\r\nAOR: wavecom\r\nURI: sip:voip.wavecom.ee\r\n"+
+					"EndpointName: wavecom\r\nStatus: Reachable\r\nRoundtripUsec: 31000\r\n\r\n", id, id)
+			}
+			_, _ = fmt.Fprintf(c, "Response: Success\r\nActionID: %s\r\n\r\n%sEvent: EndpointDetailComplete\r\nActionID: %s\r\n\r\n",
+				id, detail, id)
 		case "pjsipshowcontacts":
 			_, _ = fmt.Fprintf(c, "Response: Success\r\nActionID: %s\r\n\r\n"+
-				"Event: ContactListComplete\r\nActionID: %s\r\n\r\n", id, id)
+				"Event: ContactList\r\nActionID: %s\r\nObjectType: contact\r\n"+
+				"ObjectName: 1000;@a04f95567c2d51f59c93f480197e75af\r\nEndpoint: 1000\r\n"+
+				"Uri: sip:1000@10.0.0.44:5060\r\nStatus: Reachable\r\nRoundtripUsec: 4200\r\n\r\n"+
+				"Event: ContactListComplete\r\nActionID: %s\r\n\r\n", id, id, id)
 		case "pjsipshowregistrationsoutbound":
+			// FreePBX names the registration after the trunk ("wavecom-reg-0")
+			// and leaves Endpoint unset; the contact stays under "wavecom".
 			_, _ = fmt.Fprintf(c, "Response: Success\r\nActionID: %s\r\n\r\n"+
-				"Event: OutboundRegistrationDetailComplete\r\nActionID: %s\r\n\r\n", id, id)
+				"Event: OutboundRegistrationDetail\r\nActionID: %s\r\nObjectType: registration\r\n"+
+				"ObjectName: wavecom-reg-0\r\nStatus: Registered\r\n"+
+				"ServerUri: sip:sip.example.com\r\nClientUri: sip:user@example.com\r\n\r\n"+
+				"Event: OutboundRegistrationDetailComplete\r\nActionID: %s\r\n\r\n", id, id, id)
 		default:
 			_, _ = fmt.Fprintf(c, "Response: Error\r\nActionID: %s\r\nMessage: not implemented\r\n\r\n", id)
 		}
@@ -144,8 +163,35 @@ func TestRefreshOnlineReportsFreshData(t *testing.T) {
 	if d.Global.ActiveChannels != "4" || d.Global.ActiveCalls != "2" {
 		t.Errorf("counters = channels %q calls %q; want 4/2", d.Global.ActiveChannels, d.Global.ActiveCalls)
 	}
-	if len(d.Endpoints) != 1 {
-		t.Errorf("endpoints = %d; want 1", len(d.Endpoints))
+	if len(d.Endpoints) != 2 {
+		t.Errorf("endpoints = %d; want 2", len(d.Endpoints))
+	}
+	if len(d.Contacts) != 1 || d.Contacts[0].Roundtrip != "4.200 ms" {
+		t.Errorf("contacts = %+v; want one contact with roundtrip 4.200 ms", d.Contacts)
+	}
+}
+
+// An OutboundRegistrationDetail has no RTT of its own, and PJSIPShowContacts
+// does not report a trunk's configured contact at all, so the trunk row must
+// take the qualify time from its endpoint's ContactStatusDetail.
+func TestRefreshTrunkRoundtripComesFromEndpointContactStatus(t *testing.T) {
+	srv := startTestAMI(t)
+	c := dialTestAMI(t, srv)
+	defer c.Close()
+	s := NewAsteriskService(c)
+
+	if err := s.Refresh(); err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	trunks := s.GetData().Trunks
+	if len(trunks) != 1 {
+		t.Fatalf("trunks = %d; want 1", len(trunks))
+	}
+	if trunks[0].Name != "wavecom-reg-0" {
+		t.Errorf("trunk name = %q; want wavecom-reg-0", trunks[0].Name)
+	}
+	if trunks[0].Roundtrip != "31.000 ms" {
+		t.Errorf("trunk roundtrip = %q; want 31.000 ms", trunks[0].Roundtrip)
 	}
 }
 

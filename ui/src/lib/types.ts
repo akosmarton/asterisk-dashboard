@@ -50,6 +50,7 @@ export interface Trunk {
   status: string
   address: string
   details: string
+  roundtrip: string
 }
 
 export interface CallHistoryEntry {

@@ -271,7 +271,7 @@
             id="trunks"
             title={'Trunks & registrations'}
             count={trunks.length}
-            colspan={5}
+            colspan={6}
             empty="No registered trunks or external providers"
           >
             {#snippet head()}
@@ -281,6 +281,7 @@
                 <th>Status</th>
                 <th>Server address</th>
                 <th>Details</th>
+                <th class="text-right">RTT</th>
               </tr>
             {/snippet}
             {#snippet rows()}
@@ -291,6 +292,7 @@
                   <td><span class="badge badge-sm {getBadgeClass(t.status)}">{t.status || '-'}</span></td>
                   <td>{t.address || '-'}</td>
                   <td>{t.details || '-'}</td>
+                  <td class="text-right tabular-nums">{t.roundtrip || '-'}</td>
                 </tr>
               {/each}
             {/snippet}

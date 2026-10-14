@@ -47,6 +47,10 @@ type TrunkInfo struct {
 	Status  string `json:"status"`
 	Address string `json:"address"`
 	Details string `json:"details"`
+	// Roundtrip is the qualify round-trip time of the contact belonging to the
+	// trunk's endpoint. OutboundRegistrationDetail has no RTT of its own, so
+	// this is read from the matching ContactList event.
+	Roundtrip string `json:"roundtrip"`
 }
 
 type GlobalState struct {
@@ -227,12 +231,17 @@ func (s *AsteriskService) Refresh() error {
 
 	// 5. Fetch PJSIP Endpoints list
 	epEvents, _ := s.amiClient.SendActionWithEvents("PJSIPShowEndpoints", nil, "EndpointListComplete")
+	// Base name -> endpoint name, so a FreePBX outbound registration
+	// ("wavecom-reg-0") can be traced back to the endpoint that owns the trunk's
+	// contact.
+	endpointNames := make(map[string]string)
 	for _, ev := range epEvents {
 		if strings.EqualFold(ev.Headers["event"], "EndpointList") {
 			name := ev.Headers["objectname"]
 			if name == "" {
 				continue
 			}
+			endpointNames[trunkBaseName(name)] = name
 
 			ctx, allow := s.getEndpointConfig(name)
 
@@ -252,6 +261,12 @@ func (s *AsteriskService) Refresh() error {
 	// which truncates the IPv6 URIs mid-address. The action's ContactList
 	// events carry the full Uri plus the endpoint the contact belongs to.
 	contactEvents, _ := s.amiClient.SendActionWithEvents("PJSIPShowContacts", nil, "ContactListComplete")
+	// Base name -> qualify round-trip, so a trunk row can show the latency of its
+	// contact when that contact comes back from this action. It does not for a
+	// trunk: PJSIPShowContacts only reports the contacts that exist as sorcery
+	// objects, i.e. the dynamic ones created by an inbound REGISTER.
+	// trunkEndpointRTT covers the configured contact a trunk actually has.
+	contactRTT := make(map[string]string)
 	for _, ev := range contactEvents {
 		uri := ev.Headers["uri"]
 		if !strings.EqualFold(ev.Headers["event"], "ContactList") || uri == "" {
@@ -267,18 +282,49 @@ func (s *AsteriskService) Refresh() error {
 			c.Roundtrip = fmt.Sprintf("%.3f ms", float64(usec)/1000)
 		}
 		data.Contacts = append(data.Contacts, c)
+
+		if ep := trunkBaseName(ev.Headers["endpoint"]); ep != "" && c.Roundtrip != "" {
+			if _, ok := contactRTT[ep]; !ok {
+				contactRTT[ep] = c.Roundtrip
+			}
+		}
+	}
+
+	// resolveTrunkRTT returns the qualify round-trip for a trunk row, trying each
+	// candidate object name in turn: the cheap contact table first, then the
+	// trunk endpoint's own contact status.
+	resolveTrunkRTT := func(candidates ...string) string {
+		for _, candidate := range candidates {
+			if rtt := contactRTT[trunkBaseName(candidate)]; rtt != "" {
+				return rtt
+			}
+		}
+		for _, candidate := range candidates {
+			if endpoint, ok := endpointNames[trunkBaseName(candidate)]; ok {
+				if rtt := s.trunkEndpointRTT(endpoint); rtt != "" {
+					return rtt
+				}
+			}
+		}
+		return ""
 	}
 
 	// 7. Fetch Outbound Registrations (Trunks)
 	regEvents, _ := s.amiClient.SendActionWithEvents("PJSIPShowRegistrationsOutbound", nil, "OutboundRegistrationDetailComplete", "RegistrationsOutboundListComplete")
 	for _, ev := range regEvents {
 		if strings.EqualFold(ev.Headers["event"], "OutboundRegistrationDetail") {
+			name := ev.Headers["objectname"]
+			// A registration has no latency of its own; its RTT is the trunk's,
+			// i.e. the endpoint contact's. FreePBX names the registration after
+			// the trunk ("wavecom-reg-0") and may leave Endpoint unset, so both
+			// names are candidates.
 			data.Trunks = append(data.Trunks, TrunkInfo{
-				Name:    ev.Headers["objectname"],
-				Type:    "PJSIP Outbound",
-				Status:  ev.Headers["status"],
-				Address: ev.Headers["serveruri"],
-				Details: fmt.Sprintf("Client: %s", ev.Headers["clienturi"]),
+				Name:      name,
+				Type:      "PJSIP Outbound",
+				Status:    ev.Headers["status"],
+				Address:   ev.Headers["serveruri"],
+				Details:   fmt.Sprintf("Client: %s", ev.Headers["clienturi"]),
+				Roundtrip: resolveTrunkRTT(ev.Headers["endpoint"], name),
 			})
 		}
 	}
@@ -295,11 +341,12 @@ func (s *AsteriskService) Refresh() error {
 			}
 			if !found {
 				data.Trunks = append(data.Trunks, TrunkInfo{
-					Name:    ep.ObjectName,
-					Type:    "SIP Trunk Endpoint",
-					Status:  ep.Devicestate,
-					Address: ep.Aor,
-					Details: fmt.Sprintf("Channels: %s", ep.ActiveChannels),
+					Name:      ep.ObjectName,
+					Type:      "SIP Trunk Endpoint",
+					Status:    ep.Devicestate,
+					Address:   ep.Aor,
+					Details:   fmt.Sprintf("Channels: %s", ep.ActiveChannels),
+					Roundtrip: resolveTrunkRTT(ep.ObjectName),
 				})
 			}
 		}
@@ -310,6 +357,46 @@ func (s *AsteriskService) Refresh() error {
 	s.mu.Unlock()
 
 	return nil
+}
+
+// trunkBaseName lowercases a PJSIP object name and strips FreePBX's
+// per-registration suffix ("wavecom-reg-0" -> "wavecom"). A registered trunk
+// keeps its endpoint, aor and contact under the bare trunk name, so a
+// registration only lines up with them after this reduction.
+func trunkBaseName(name string) string {
+	name = strings.ToLower(name)
+	if i := strings.LastIndex(name, "-reg-"); i > 0 {
+		if _, err := strconv.Atoi(name[i+5:]); err == nil {
+			return name[:i]
+		}
+	}
+	return name
+}
+
+// trunkEndpointRTT returns the qualify round-trip time of a trunk endpoint's
+// contact.
+//
+// The contact table cannot supply it: PJSIPShowContacts only reports the
+// contacts that exist as sorcery objects, i.e. the dynamic ones an inbound
+// REGISTER created. A trunk's contact is configuration — "pjsip show contacts"
+// lists it with an RTT while that action reports nothing at all for it (checked
+// against Asterisk 23.5). The endpoint's ContactStatusDetail does carry it, one
+// event per contact of the endpoint's AORs.
+func (s *AsteriskService) trunkEndpointRTT(endpoint string) string {
+	events, err := s.amiClient.SendActionWithEvents("PJSIPShowEndpoint", map[string]string{"Endpoint": endpoint}, "EndpointDetailComplete")
+	if err != nil {
+		return ""
+	}
+	for _, ev := range events {
+		if !strings.EqualFold(ev.Headers["event"], "ContactStatusDetail") {
+			continue
+		}
+		// RoundtripUsec is "N/A" until the contact has qualified at least once.
+		if usec, err := strconv.Atoi(ev.Headers["roundtripusec"]); err == nil {
+			return fmt.Sprintf("%.3f ms", float64(usec)/1000)
+		}
+	}
+	return ""
 }
 
 func (s *AsteriskService) getEndpointConfig(name string) (string, string) {
