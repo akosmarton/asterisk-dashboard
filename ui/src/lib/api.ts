@@ -49,10 +49,10 @@ export async function login(username: string, password: string): Promise<LoginRe
 }
 
 /**
- * POST /api/logout -> 204.
+ * DELETE /api/session -> 204. Public and idempotent.
  */
 export async function logout(): Promise<void> {
-  await fetch('/api/logout', { method: 'POST' })
+  await fetch('/api/session', { method: 'DELETE' })
 }
 
 export type DataResult =
@@ -76,7 +76,7 @@ export interface DashboardSocketHandlers {
 }
 
 /**
- * Opens /ws (same origin) and reconnects after 2 seconds whenever the socket
+ * Opens /api/ws (same origin) and reconnects after 2 seconds whenever the socket
  * closes. Returns a cleanup function that stops the reconnect loop and closes
  * the socket.
  */
@@ -87,7 +87,7 @@ export function connectDashboardSocket(handlers: DashboardSocketHandlers): () =>
 
   function connect(): void {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const ws = new WebSocket(`${protocol}//${window.location.host}/ws`)
+    const ws = new WebSocket(`${protocol}//${window.location.host}/api/ws`)
     socket = ws
 
     ws.onopen = () => {

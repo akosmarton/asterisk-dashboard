@@ -37,8 +37,9 @@ ui/                  # the whole Vite project; nothing here is Go
   package.json       # svelte, @sveltejs/vite-plugin-svelte, typescript, svelte-check, vite
 
 web/                 # Go only: HTTP handlers, auth, WebSocket hub
-  handler.go         # SPA shell, /api/data, /ws, favicon
-  auth.go            # sessions, /api/session, /api/login, /api/logout + the middleware
+  handler.go         # SPA shell, /api/data, /api/ws, favicon
+  auth.go            # auth middleware, identity, GET/DELETE /api/session, /api/login
+  session.go         # stateless v1 HMAC session codec: mint, verify, set/clear cookie
   oidc.go            # /api/oidc/login, /api/oidc/callback: the PKCE flow + the allow-list
   hub.go             # WebSocket broadcast hub
 main.go              # wiring + `//go:embed all:ui/dist`
@@ -81,15 +82,15 @@ fixed), so a rebuild does not need a manual cache clear.
 | --- | --- | --- |
 | `GET /api/session` | no | `{"authenticated": bool, "password_login": bool, "oidc_login": bool, "user": {"name","email","monogram"} \| null}` |
 | `POST /api/login` | no | JSON `{"username","password"}` → `{"ok":true}` + `Set-Cookie`, or `401 {"error"}` |
-| `POST /api/logout` | no | `204`, clears the cookie |
+| `DELETE /api/session` | no | public, idempotent logout: `204`, clears the cookie when present |
 | `GET /api/oidc/login` | no | `303` to the IdP's authorization endpoint: starts the PKCE flow (or back to `/?auth_error=failed` when SSO is off) |
 | `GET /api/oidc/callback` | no | `303` to `/` on success, else `/?auth_error=failed` or `/?auth_error=forbidden` |
 | `GET /api/data` | yes | the `DashboardData` snapshot (same shape as a WebSocket message) |
-| `GET /ws` | yes | WebSocket: a full snapshot on connect, then on every change |
+| `GET /api/ws` | yes | WebSocket: a full snapshot on connect, then on every change |
 | `GET /` and every other path | no | the SPA shell; the client renders the login view itself |
 
-`/api/session`, `/api/login`, `/api/logout`, `/api/oidc/login` and `/api/oidc/callback` are the only
-unauthenticated API paths; everything else under `/api/` and `/ws` answers
+`/api/session` (GET and DELETE), `/api/login`, `/api/oidc/login` and `/api/oidc/callback` are the only
+unauthenticated API paths; everything else under `/api/` (including `/api/ws`) answers
 `401 {"error":"Unauthorized"}` without a session. The session cookie is `HttpOnly`, so the token
 never reaches JavaScript; it carries the identity and its expiry signed with `SESSION_SECRET` (see
 [Sessions](#sessions)).
@@ -105,7 +106,8 @@ Two methods, both optional, and neither of them has a default:
 
 With **no** method configured the server logs a warning at startup and the dashboard is reachable
 only with an API key in front of it — the app itself checks none: nobody can sign in, and the login
-card says so.
+card says so. The password login body is capped at 4 KiB (`http.MaxBytesReader`) and answers `413`
+above it.
 
 SSO uses the authorization code flow with PKCE (`S256`), a single-use `state` and the provider's
 discovery document, fetched at startup (an unreachable or mistyped issuer URL fails the boot). The
@@ -118,21 +120,26 @@ never mean "everyone". The `redirect_uri` is derived from the request (`X-Forwar
 
 ### Sessions
 
-The session cookie is self-contained: `v1.<claims>.<hmac>`, where the claims are the signed-in
-identity plus the expiry (24 h) and the tag is HMAC-SHA256 over the claims under `SESSION_SECRET`.
-Nothing is stored server-side, so `POST /api/logout` clears the cookie in the browser while a copy
-taken earlier stays valid until it expires — a bearer token, no server-side revocation list.
+The session cookie is `asterisk_session`, self-contained: `v1.<base64url(claims)>.<base64url(hmac)>`,
+where the claims are `{sub, name, email, aud: "asterisk", exp}` and the tag is HMAC-SHA256 over
+`session.v1.` plus the payload under `SESSION_SECRET`. It is `HttpOnly`, `SameSite=Lax`, `Path=/api`,
+carries both `Expires` and `Max-Age` (24 h), and is `Secure` when the request arrived over HTTPS
+(directly or via `X-Forwarded-Proto`). Nothing is stored server-side, so `DELETE /api/session` clears
+the cookie in the browser while a copy taken earlier stays valid until it expires — a bearer token,
+no server-side revocation list.
 
-`SESSION_SECRET` is the only session setting, it must be at least 32 characters, and it is read
-from the environment only (a CLI flag would expose it in the process list):
+`SESSION_SECRET` is the only session setting, it must be at least 32 bytes, and it is read from the
+environment only (a CLI flag would expose it in the process list). It is required whenever
+`ADMIN_USER`/`ADMIN_PASSWORD` or OIDC is configured; without it the server refuses to start rather
+than mint cookies it could not verify.
 
 ```bash
 export SESSION_SECRET="$(openssl rand -hex 32)"
 ```
 
 Keep the value stable: the same secret after a restart accepts the cookies already handed out, a
-new one signs everyone out. Without it the server still boots, signs the cookies with a random
-per-process key and logs a warning that sign-ins will not survive a restart.
+new one signs everyone out. With a sign-in method configured but no usable secret the server
+refuses to start, rather than signing cookies with a key it cannot verify.
 
 ### Frontend notes
 
@@ -215,26 +222,10 @@ asterisk -rx "manager reload"
 build, so `npm run dev` changes show up without a Go rebuild — see
 [Frontend (UI)](#frontend-ui).
 
-### Using Environment Variables:
+### Using the `.env` file:
 ```bash
-export AMI_HOST=localhost
-export AMI_PORT=5038
-export AMI_USER=admin
-export AMI_PASS=admin
-export HTTP_PORT=8080
-export ADMIN_USER=admin
-export ADMIN_PASSWORD=admin
-# Signing key for the session cookie (see Sessions). Generate it once with
-# `openssl rand -hex 32` and keep it: the same value after a restart keeps the
-# existing sign-ins. Unset = random per-process key, everyone signs in again.
-export SESSION_SECRET=replace-with-64-hex-characters-from-openssl-rand-hex-32
-
-# Optional SSO — all four together, or none at all (see Sign-in)
-export OIDC_ISSUER_URL=https://id.example.com
-export OIDC_CLIENT_ID=asterisk-dashboard
-export OIDC_CLIENT_SECRET=your_client_secret
-export OIDC_ALLOWED_EMAILS=you@example.com,oncall@example.com
-
+cp .env.example .env   # fill in AMI_*, ADMIN_*, SESSION_SECRET and optional OIDC_*
+set -a; . ./.env; set +a
 ./asterisk-dashboard
 ```
 
@@ -242,19 +233,13 @@ export OIDC_ALLOWED_EMAILS=you@example.com,oncall@example.com
 ```bash
 docker compose up -d --build
 ```
+Compose reads `.env` through `env_file`; copy `.env.example` to `.env` first.
 
 ### Using Docker:
 ```bash
 docker build -t asterisk-dashboard .
 
-docker run -d -p 8080:8080 \
-  -e AMI_HOST=localhost \
-  -e AMI_PORT=5038 \
-  -e AMI_USER=admin \
-  -e AMI_PASS=admin \
-  -e ADMIN_USER=admin \
-  -e ADMIN_PASSWORD=admin \
-  -e SESSION_SECRET=replace-with-64-hex-characters-from-openssl-rand-hex-32 \
+docker run -d -p 8080:8080 --env-file .env \
   --name asterisk-dashboard \
   asterisk-dashboard
 ```

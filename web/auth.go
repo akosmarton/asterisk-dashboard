@@ -1,26 +1,18 @@
 package web
 
 import (
-	"crypto/hmac"
-	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
-	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"log"
 	"net/http"
 	"strings"
 	"sync"
-	"time"
 	"unicode"
 )
 
 const (
-	sessionCookieName    = "session_token"
-	sessionCookieVersion = "v1"
-	sessionDuration      = 24 * time.Hour
-	sessionKeySize       = 32
 	// maxLoginBody caps the JSON credentials body.
 	maxLoginBody = 4096
 )
@@ -33,8 +25,8 @@ type AuthConfig struct {
 	Pass string
 	OIDC *OIDCConfig // nil = SSO off
 	// SessionSecret is the SESSION_SECRET the session cookies are signed with.
-	// The same value after a restart keeps existing sign-ins valid; empty means
-	// a random per-process key, so every restart signs everyone out.
+	// It is required (at least 32 bytes) whenever a sign-in method is enabled;
+	// with neither method configured it is unused.
 	SessionSecret string
 }
 
@@ -50,7 +42,7 @@ type AuthManager struct {
 	expectedUser string
 	expectedPass string
 	oidc         *oidcClient
-	sessionKey   []byte // HMAC key for the session cookie; see sessionKeyFromSecret
+	sessions     *sessionCodec // signs and verifies the session cookie
 	authStates   map[string]oidcState
 	mu           sync.RWMutex
 }
@@ -65,11 +57,17 @@ func NewAuthManager(cfg AuthConfig) (*AuthManager, error) {
 		authStates:   make(map[string]oidcState),
 	}
 
-	key, err := sessionKeyFromSecret(cfg.SessionSecret)
-	if err != nil {
-		return nil, err
+	// Sessions exist only when a sign-in method does. A configured sign-in
+	// method without a usable SESSION_SECRET is a startup error: cookies could be
+	// minted but never verified, which would look like a broken login rather than
+	// a missing variable.
+	if cfg.User != "" || cfg.OIDC != nil || cfg.SessionSecret != "" {
+		sessions, err := newSessionCodec(cfg.SessionSecret, sessionAudience)
+		if err != nil {
+			return nil, err
+		}
+		a.sessions = sessions
 	}
-	a.sessionKey = key
 
 	if cfg.OIDC != nil {
 		client, err := newOIDCClient(cfg.OIDC)
@@ -82,95 +80,27 @@ func NewAuthManager(cfg AuthConfig) (*AuthManager, error) {
 	return a, nil
 }
 
-// sessionKeyFromSecret turns SESSION_SECRET into the HMAC key that signs the
-// session cookies. A stable secret is what keeps a sign-in valid across a
-// restart: any other value invalidates every cookie already handed out. An
-// empty secret falls back to a random per-process key, which keeps the server
-// usable but signs everyone out on restart, so it is logged rather than
-// treated as fatal.
-func sessionKeyFromSecret(secret string) ([]byte, error) {
-	if secret == "" {
-		key := make([]byte, sessionKeySize)
-		if _, err := rand.Read(key); err != nil {
-			return nil, fmt.Errorf("generate session key: %w", err)
-		}
-		log.Println("[Auth] SESSION_SECRET is not set: session cookies are signed with a random key, so a restart signs everyone out")
-		return key, nil
-	}
-	if len(secret) < sessionKeySize {
-		return nil, fmt.Errorf("SESSION_SECRET must be at least %d characters (generate one with `openssl rand -hex 32`)", sessionKeySize)
-	}
-	return []byte(secret), nil
-}
-
-// sessionClaims is the signed cookie payload: the signed-in identity plus the
-// expiry the client cannot move without breaking the HMAC.
-type sessionClaims struct {
-	User    sessionUser `json:"user"`
-	Expires int64       `json:"exp"`
-}
-
-// signSession encodes user with its expiry and tags it with the manager's key.
-// The MAC covers the payload bytes, so the claims cannot be edited into a
-// different identity or a later expiry.
-func (a *AuthManager) signSession(user sessionUser, expires time.Time) string {
-	payload, err := json.Marshal(sessionClaims{User: user, Expires: expires.Unix()})
-	if err != nil {
-		panic("web: marshal session claims: " + err.Error()) // strings and an int only
-	}
-	mac := hmac.New(sha256.New, a.sessionKey)
-	mac.Write(payload)
-	return sessionCookieVersion + "." +
-		base64.RawURLEncoding.EncodeToString(payload) + "." +
-		base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
-}
-
-// parseSession verifies a cookie value and returns the identity it carries.
-// The tag is compared in constant time (hmac.Equal), so a forged cookie cannot
-// be discovered tag byte by tag byte.
-func (a *AuthManager) parseSession(value string) *sessionUser {
-	version, rest, ok := strings.Cut(value, ".")
-	if !ok || version != sessionCookieVersion {
-		return nil
-	}
-	encodedPayload, encodedMAC, ok := strings.Cut(rest, ".")
-	if !ok {
-		return nil
-	}
-	payload, err := base64.RawURLEncoding.DecodeString(encodedPayload)
-	if err != nil {
-		return nil
-	}
-	gotMAC, err := base64.RawURLEncoding.DecodeString(encodedMAC)
-	if err != nil {
-		return nil
-	}
-	mac := hmac.New(sha256.New, a.sessionKey)
-	mac.Write(payload)
-	if !hmac.Equal(mac.Sum(nil), gotMAC) {
-		return nil
-	}
-
-	var claims sessionClaims
-	if err := json.Unmarshal(payload, &claims); err != nil {
-		return nil
-	}
-	if time.Now().After(time.Unix(claims.Expires, 0)) {
-		return nil
-	}
-	return &claims.User
-}
-
 // currentSession returns the identity carried by the request's session cookie,
 // or nil when there is none, when the cookie was forged, or when it has
 // expired. With no sign-in method configured it always returns nil: there is
 // no open mode.
 func (a *AuthManager) currentSession(r *http.Request) *sessionUser {
+	if a.sessions == nil {
+		return nil
+	}
 	cookie, err := r.Cookie(sessionCookieName)
 	if err != nil || cookie.Value == "" {
 		return nil
 	}
-	return a.parseSession(cookie.Value)
+	claims, ok := a.sessions.Decode(cookie.Value)
+	if !ok {
+		return nil
+	}
+	return &sessionUser{
+		Name:     claims.Name,
+		Email:    claims.Email,
+		Monogram: monogramOf(claims.Name, claims.Email),
+	}
 }
 
 func (a *AuthManager) isAuthenticated(r *http.Request) bool {
@@ -180,16 +110,43 @@ func (a *AuthManager) isAuthenticated(r *http.Request) bool {
 // startSession sets the session cookie for user. The cookie carries the signed
 // identity, so the same key after a restart keeps the sign-in valid; it is
 // HttpOnly, so the client never sees the token.
-func (a *AuthManager) startSession(w http.ResponseWriter, user sessionUser) {
-	expires := time.Now().Add(sessionDuration)
-	http.SetCookie(w, &http.Cookie{
-		Name:     sessionCookieName,
-		Value:    a.signSession(user, expires),
-		Path:     "/",
-		Expires:  expires,
-		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
-	})
+func (a *AuthManager) startSession(w http.ResponseWriter, r *http.Request, user sessionUser) error {
+	if a.sessions == nil {
+		return fmt.Errorf("session signing is not configured")
+	}
+	subject := user.Email
+	if subject == "" {
+		subject = user.Name
+	}
+	token, expires, err := a.sessions.Issue(subject, user.Name, user.Email)
+	if err != nil {
+		return err
+	}
+	http.SetCookie(w, newSessionCookie(sessionCookieName, sessionCookiePath, token, expires, secureRequest(r)))
+	return nil
+}
+
+// secureRequest reports whether the browser reached the server over HTTPS,
+// either directly or through a proxy that forwarded the original scheme.
+func secureRequest(r *http.Request) bool {
+	if r.TLS != nil {
+		return true
+	}
+	for _, proto := range strings.Split(r.Header.Get("X-Forwarded-Proto"), ",") {
+		if strings.EqualFold(strings.TrimSpace(proto), "https") {
+			return true
+		}
+	}
+	return false
+}
+
+// constantTimeEqual compares two secrets without leaking their contents or
+// lengths through timing. Hashing to fixed 32-byte digests is what makes the
+// comparison cost flat even when the inputs differ in length.
+func constantTimeEqual(a, b string) bool {
+	ha := sha256.Sum256([]byte(a))
+	hb := sha256.Sum256([]byte(b))
+	return subtle.ConstantTimeCompare(ha[:], hb[:]) == 1
 }
 
 // monogramOf returns up to two uppercase initials for the account button: from
@@ -263,19 +220,29 @@ func (a *AuthManager) HandleLogin(w http.ResponseWriter, r *http.Request) {
 		Password string `json:"password"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxLoginBody)).Decode(&creds); err != nil {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			writeJSONError(w, http.StatusRequestEntityTooLarge, "Request Entity Too Large.")
+			return
+		}
 		writeJSONError(w, http.StatusBadRequest, "Malformed request.")
 		return
 	}
 
-	userMatch := subtle.ConstantTimeCompare([]byte(creds.Username), []byte(a.expectedUser)) == 1
-	passMatch := subtle.ConstantTimeCompare([]byte(creds.Password), []byte(a.expectedPass)) == 1
+	// Both sides are hashed first: ConstantTimeCompare returns immediately when
+	// the lengths differ, which would leak the configured credential lengths.
+	userMatch := constantTimeEqual(creds.Username, a.expectedUser)
+	passMatch := constantTimeEqual(creds.Password, a.expectedPass)
 
 	if !userMatch || !passMatch {
 		writeJSONError(w, http.StatusUnauthorized, "Invalid username or password.")
 		return
 	}
 
-	a.startSession(w, sessionUser{Name: a.expectedUser, Monogram: monogramOf(a.expectedUser, "")})
+	if err := a.startSession(w, r, sessionUser{Name: a.expectedUser, Monogram: monogramOf(a.expectedUser, "")}); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "Internal server error.")
+		return
+	}
 
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
@@ -285,19 +252,12 @@ func (a *AuthManager) HandleLogin(w http.ResponseWriter, r *http.Request) {
 // browser holding it; a copy taken earlier stays valid until its expiry, like
 // any bearer token.
 func (a *AuthManager) HandleLogout(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeJSONError(w, http.StatusMethodNotAllowed, "Method not allowed.")
-		return
+	// Public and idempotent: an expired cookie must be clearable, but a
+	// cross-site request (which SameSite=Lax sends without the cookie) must not
+	// trigger a deletion.
+	if _, err := r.Cookie(sessionCookieName); err == nil {
+		http.SetCookie(w, clearSessionCookie(sessionCookieName, sessionCookiePath, secureRequest(r)))
 	}
-
-	http.SetCookie(w, &http.Cookie{
-		Name:     sessionCookieName,
-		Value:    "",
-		Path:     "/",
-		MaxAge:   -1,
-		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
-	})
 
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -306,7 +266,6 @@ func (a *AuthManager) HandleLogout(w http.ResponseWriter, r *http.Request) {
 // sign-in endpoints and the frontend build.
 func publicPath(p string) bool {
 	return p == "/api/login" ||
-		p == "/api/logout" ||
 		p == "/api/session" ||
 		p == "/api/oidc/login" ||
 		p == "/api/oidc/callback" ||
@@ -319,7 +278,7 @@ func publicPath(p string) bool {
 // other path is a page request, and the SPA shell decides what to render (it
 // asks /api/session), so page requests are never redirected.
 func dataPath(p string) bool {
-	return strings.HasPrefix(p, "/api/") || p == "/ws"
+	return strings.HasPrefix(p, "/api/")
 }
 
 func (a *AuthManager) Middleware(next http.Handler) http.Handler {

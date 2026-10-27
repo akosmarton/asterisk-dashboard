@@ -8,3 +8,8 @@ asterisk-dashboard
 ui/node_modules
 ui/dist/*
 !ui/dist/.gitkeep
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example

@@ -124,7 +124,7 @@ func TestHubBroadcastNeverBlocks(t *testing.T) {
 	hts.Close()
 }
 
-// TestHubRegisterNotBlockedByStuckClients asserts a brand-new GET /ws client is
+// TestHubRegisterNotBlockedByStuckClients asserts a brand-new GET /api/ws client is
 // served promptly while other clients are stuck.
 func TestHubRegisterNotBlockedByStuckClients(t *testing.T) {
 	hub := NewHub()

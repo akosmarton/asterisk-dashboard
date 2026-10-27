@@ -217,13 +217,18 @@ func main() {
 		log.Fatalf("auth: %v", err)
 	}
 
-	mux.HandleFunc("/api/session", authMgr.HandleSession)
+	mux.HandleFunc("GET /api/session", authMgr.HandleSession)
+	mux.HandleFunc("DELETE /api/session", authMgr.HandleLogout)
 	mux.HandleFunc("/api/login", authMgr.HandleLogin)
-	mux.HandleFunc("/api/logout", authMgr.HandleLogout)
 	mux.HandleFunc("/api/oidc/login", authMgr.HandleOIDCLogin)
 	mux.HandleFunc("/api/oidc/callback", authMgr.HandleOIDCCallback)
 	mux.HandleFunc("/api/data", webHandler.HandleData)
-	mux.HandleFunc("/ws", webHandler.HandleWS)
+	mux.HandleFunc("/api/ws", webHandler.HandleWS)
+	// The socket moved under /api so the session cookie (Path=/api) reaches it.
+	// Keep the old path from falling through to the SPA shell.
+	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	})
 	mux.HandleFunc("/favicon.svg", webHandler.HandleFavicon)
 	mux.HandleFunc("/favicon.ico", webHandler.HandleFavicon)
 	mux.Handle("/static/", http.StripPrefix("/static/", webHandler.StaticHandler()))

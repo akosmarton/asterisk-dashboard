@@ -14,14 +14,14 @@ import (
 
 func TestAuthManager(t *testing.T) {
 	mux := http.NewServeMux()
-	authMgr, err := NewAuthManager(AuthConfig{User: "admin", Pass: "secret"})
+	authMgr, err := NewAuthManager(AuthConfig{User: "admin", Pass: "secret", SessionSecret: testSessionSecret})
 	if err != nil {
 		t.Fatalf("NewAuthManager: %v", err)
 	}
 
-	mux.HandleFunc("/api/session", authMgr.HandleSession)
+	mux.HandleFunc("GET /api/session", authMgr.HandleSession)
+	mux.HandleFunc("DELETE /api/session", authMgr.HandleLogout)
 	mux.HandleFunc("/api/login", authMgr.HandleLogin)
-	mux.HandleFunc("/api/logout", authMgr.HandleLogout)
 	mux.HandleFunc("/api/data", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 	})
@@ -56,6 +56,19 @@ func TestAuthManager(t *testing.T) {
 		resp, err := client.Get(ts.URL + path)
 		if err != nil {
 			t.Fatalf("GET %s failed: %v", path, err)
+		}
+		return resp
+	}
+
+	del := func(path string) *http.Response {
+		t.Helper()
+		req, err := http.NewRequest(http.MethodDelete, ts.URL+path, nil)
+		if err != nil {
+			t.Fatalf("build DELETE %s: %v", path, err)
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("DELETE %s failed: %v", path, err)
 		}
 		return resp
 	}
@@ -166,8 +179,8 @@ func TestAuthManager(t *testing.T) {
 	if !session.HttpOnly {
 		t.Error("the session cookie must be HttpOnly")
 	}
-	if session.Path != "/" {
-		t.Errorf("expected cookie path /, got %q", session.Path)
+	if session.Path != sessionCookiePath {
+		t.Errorf("expected cookie path %q, got %q", sessionCookiePath, session.Path)
 	}
 
 	// 7. The session is now valid, and carries the signed-in identity.
@@ -187,9 +200,19 @@ func TestAuthManager(t *testing.T) {
 	resp.Body.Close()
 
 	// 9. Signing out drops the session.
-	resp = postJSON("/api/logout", "")
+	resp = del("/api/session")
 	if resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("expected 204 for logout, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	// Idempotent: no cookie, no Set-Cookie, still 204.
+	resp = del("/api/session")
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("expected 204 for a second logout, got %d", resp.StatusCode)
+	}
+	if len(resp.Cookies()) != 0 {
+		t.Errorf("expected no Set-Cookie without a session, got %+v", resp.Cookies())
 	}
 	resp.Body.Close()
 
@@ -336,15 +359,15 @@ func TestSessionSurvivesRestart(t *testing.T) {
 // TestSessionCookieValidation covers the ways a cookie must not be trusted:
 // edited claims, a tag from another key, an expired expiry and garbage.
 func TestSessionCookieValidation(t *testing.T) {
+	const secret = "0123456789abcdef0123456789abcdef"
 	mgr, err := NewAuthManager(AuthConfig{
 		User:          "admin",
 		Pass:          "secret",
-		SessionSecret: "0123456789abcdef0123456789abcdef",
+		SessionSecret: secret,
 	})
 	if err != nil {
 		t.Fatalf("NewAuthManager: %v", err)
 	}
-	user := sessionUser{Name: "admin", Monogram: "A"}
 
 	request := func(value string) *http.Request {
 		r := httptest.NewRequest(http.MethodGet, "/api/data", nil)
@@ -352,7 +375,7 @@ func TestSessionCookieValidation(t *testing.T) {
 		return r
 	}
 
-	valid := mgr.signSession(user, time.Now().Add(time.Hour))
+	valid := mustIssueSession(t, mgr.sessions, "admin", "admin", "")
 	if !mgr.isAuthenticated(request(valid)) {
 		t.Fatal("expected a freshly signed cookie to authenticate")
 	}
@@ -370,7 +393,8 @@ func TestSessionCookieValidation(t *testing.T) {
 	if err := json.Unmarshal(payload, &claims); err != nil {
 		t.Fatalf("decode claims: %v", err)
 	}
-	claims.User.Name = "root"
+	claims.Subject = "root"
+	claims.Name = "root"
 	edited, err := json.Marshal(claims)
 	if err != nil {
 		t.Fatalf("encode claims: %v", err)
@@ -387,11 +411,16 @@ func TestSessionCookieValidation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewAuthManager: %v", err)
 	}
-	if mgr.isAuthenticated(request(foreign.signSession(user, time.Now().Add(time.Hour)))) {
+	if mgr.isAuthenticated(request(mustIssueSession(t, foreign.sessions, "admin", "admin", ""))) {
 		t.Fatal("a cookie signed with another key must be rejected")
 	}
 
-	if mgr.isAuthenticated(request(mgr.signSession(user, time.Now().Add(-time.Second)))) {
+	expiredCodec, err := newSessionCodec(secret, sessionAudience)
+	if err != nil {
+		t.Fatalf("newSessionCodec: %v", err)
+	}
+	expiredCodec.now = func() time.Time { return time.Now().Add(-sessionTTL - time.Minute) }
+	if mgr.isAuthenticated(request(mustIssueSession(t, expiredCodec, "admin", "admin", ""))) {
 		t.Fatal("an expired cookie must be rejected")
 	}
 
@@ -402,20 +431,39 @@ func TestSessionCookieValidation(t *testing.T) {
 	}
 }
 
-// TestSessionSecretValidation pins the two SESSION_SECRET rules: a configured
-// secret must be long enough to be unguessable, and a missing one must still
-// boot with a per-process key instead of breaking the dashboard.
+func TestLoginBodyLimit(t *testing.T) {
+	mgr, err := NewAuthManager(AuthConfig{User: "admin", Pass: "secret", SessionSecret: testSessionSecret})
+	if err != nil {
+		t.Fatalf("NewAuthManager: %v", err)
+	}
+
+	body := `{"username":"admin","password":"` + strings.Repeat("a", maxLoginBody) + `"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/login", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	mgr.HandleLogin(rec, req)
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("expected 413 for an oversized login body, got %d (%s)", rec.Code, rec.Body.String())
+	}
+}
+
+// TestSessionSecretValidation pins the SESSION_SECRET rules: a configured secret
+// must be long enough to be unguessable, and a sign-in method without one must
+// refuse to start rather than mint unverifiable cookies.
 func TestSessionSecretValidation(t *testing.T) {
 	if _, err := NewAuthManager(AuthConfig{SessionSecret: "too-short"}); err == nil {
 		t.Fatal("expected an error for a short SESSION_SECRET")
 	}
+	if _, err := NewAuthManager(AuthConfig{User: "admin", Pass: "secret"}); err == nil {
+		t.Fatal("expected an error for a sign-in method without SESSION_SECRET")
+	}
 
 	mgr, err := NewAuthManager(AuthConfig{})
 	if err != nil {
-		t.Fatalf("NewAuthManager without SESSION_SECRET: %v", err)
+		t.Fatalf("NewAuthManager without a sign-in method: %v", err)
 	}
-	if len(mgr.sessionKey) != sessionKeySize {
-		t.Fatalf("expected a %d-byte fallback key, got %d", sessionKeySize, len(mgr.sessionKey))
+	if mgr.sessions != nil {
+		t.Fatal("expected no session codec without a sign-in method")
 	}
 }
 

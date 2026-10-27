@@ -1,4 +1,4 @@
-// Shapes pushed by the Go API (web/handler.go) over /api/data and /ws.
+// Shapes pushed by the Go API (web/handler.go) over /api/data and /api/ws.
 // The JSON keys are the exact snake_case field names of the Go structs — keep
 // them in sync when the Go side changes.
 

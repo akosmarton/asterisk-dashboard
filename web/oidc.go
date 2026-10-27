@@ -233,7 +233,10 @@ func (a *AuthManager) HandleOIDCCallback(w http.ResponseWriter, r *http.Request)
 		name = claims.PreferredUsername
 	}
 
-	a.startSession(w, sessionUser{Name: name, Email: claims.Email, Monogram: monogramOf(name, claims.Email)})
+	if err := a.startSession(w, r, sessionUser{Name: name, Email: claims.Email, Monogram: monogramOf(name, claims.Email)}); err != nil {
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 

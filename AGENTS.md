@@ -33,8 +33,9 @@ frontend verification. Go has `go test ./...` (`service`, `web`).
 
 ```
 main.go              # flags/env, AMI + service + hub wiring, `//go:embed all:ui/dist`
-web/handler.go       # SPA shell, /api/data, /ws, favicon, /static/ mount
-web/auth.go          # sessions + identity, /api/session, /api/login, /api/logout, middleware
+web/handler.go       # SPA shell, /api/data, /api/ws, favicon, /static/ mount
+web/auth.go          # auth middleware, identity, GET/DELETE /api/session, /api/login
+web/session.go       # stateless v1 HMAC session codec: mint, verify, set/clear cookie
 web/oidc.go          # /api/oidc/login, /api/oidc/callback: the PKCE flow + the allow-list
 web/hub.go           # WebSocket broadcast hub
 service/             # state built from AMI events (asterisk.go, history.go, uptime.go)
@@ -67,8 +68,8 @@ ui/src/lib/components/  # Sidebar, Topbar, MetricCard, DataTable, LoginView, Bra
 
 - **Go renders no HTML.** `web/handler.go` serves the same SPA shell for every non-API path; the
   client asks `GET /api/session` and renders the login view or the dashboard itself.
-- **`/api/session`, `/api/login`, `/api/logout`, `/api/oidc/login` and `/api/oidc/callback` are the
-  only unauthenticated paths.** Everything else under `/api/` and `/ws` answers
+- **`/api/session` (GET and DELETE), `/api/login`, `/api/oidc/login` and `/api/oidc/callback` are the
+  only unauthenticated paths.** Everything else under `/api/` (including `/api/ws`) answers
   `401 {"error":"Unauthorized"}` without a session cookie. The cookie is `HttpOnly`; the SPA never
   sees the token and recovers from a `401`/socket close by returning to the login view.
 - **The sign-in rules live in `web/auth.go` / `web/oidc.go`, and `main.go` enforces them at
@@ -77,12 +78,15 @@ ui/src/lib/components/  # Sidebar, Topbar, MetricCard, DataTable, LoginView, Bra
   signs in (there is no open mode) and the server logs a warning. `OIDC_ALLOWED_EMAILS` is the
   authorization — the ID token only proves the account — so an unlisted address is refused with
   `/?auth_error=forbidden`, and an empty allow-list is a startup error rather than "everyone".
-- **The session cookie is stateless and signed**: `v1.<claims>.<hmac>`, claims = identity + expiry,
-  tag = HMAC-SHA256 under `SESSION_SECRET` (`web/auth.go`). There is no session store and no
-  revocation list; logout just clears the cookie, so the same secret across a restart is what keeps
-  sign-ins valid (a new one signs everyone out). `SESSION_SECRET` is env-only, at least 32
-  characters, and missing means a random per-process key plus a startup warning — never a hard
-  failure. Verify the tag with `hmac.Equal`, never with `==`.
+  The password-login body is capped at 4 KiB (`maxLoginBody`, `http.MaxBytesReader`).
+- **The session cookie is stateless and signed**: `asterisk_session` = `v1.<base64url(claims)>.<hmac>`,
+  claims = `{sub, name, email, aud: "asterisk", exp}`, tag = HMAC-SHA256 over `session.v1.` plus the
+  payload under `SESSION_SECRET` (`web/session.go`), scoped to `Path=/api` (the SPA shell and
+  static assets never receive it). There is no session store and no revocation
+  list; logout just clears the cookie, so the same secret across a restart is what keeps sign-ins
+  valid (a new one signs everyone out). `SESSION_SECRET` is env-only, at least 32 bytes, and is
+  required whenever a sign-in method is configured — a missing or short secret is a startup error,
+  never a random fallback. Verify the tag with `hmac.Equal`, never with `==`.
 - **`DashboardData` (`service/asterisk.go`) is the contract** for `/api/data` and every WebSocket
   message; `ui/src/lib/types.ts` mirrors it. Change a Go struct and update `types.ts` in the same
   change, or the SPA reads `undefined`.

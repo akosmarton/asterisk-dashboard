@@ -335,12 +335,15 @@ func callbackHop(t *testing.T, hops []hop, baseURL string) hop {
 func oidcDashboard(t *testing.T, idp *fakeIDP) (*httptest.Server, *http.Client) {
 	t.Helper()
 
-	authMgr, err := NewAuthManager(AuthConfig{OIDC: &OIDCConfig{
-		IssuerURL:     idp.srv.URL,
-		ClientID:      "dashboard",
-		ClientSecret:  "s",
-		AllowedEmails: []string{"Jane.Doe@Example.Com"}, // mixed case on purpose
-	}})
+	authMgr, err := NewAuthManager(AuthConfig{
+		OIDC: &OIDCConfig{
+			IssuerURL:     idp.srv.URL,
+			ClientID:      "dashboard",
+			ClientSecret:  "s",
+			AllowedEmails: []string{"Jane.Doe@Example.Com"}, // mixed case on purpose
+		},
+		SessionSecret: testSessionSecret,
+	})
 	if err != nil {
 		t.Fatalf("NewAuthManager: %v", err)
 	}
