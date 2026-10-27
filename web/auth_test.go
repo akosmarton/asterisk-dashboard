@@ -1,6 +1,7 @@
 package web
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -8,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestAuthManager(t *testing.T) {
@@ -265,6 +267,155 @@ func TestAuthManagerWithoutSignInMethod(t *testing.T) {
 	}
 	if loc := resp.Header.Get("Location"); loc != "/?auth_error=failed" {
 		t.Fatalf("expected the login view, got %q", loc)
+	}
+}
+
+// TestSessionSurvivesRestart pins the point of SESSION_SECRET: a cookie minted
+// before the restart is still accepted by a manager built afterwards from the
+// same secret.
+func TestSessionSurvivesRestart(t *testing.T) {
+	const sessionSecret = "0123456789abcdef0123456789abcdef"
+
+	newServer := func(mgr *AuthManager) *httptest.Server {
+		mux := http.NewServeMux()
+		mux.HandleFunc("/api/login", mgr.HandleLogin)
+		mux.HandleFunc("/api/session", mgr.HandleSession)
+		ts := httptest.NewServer(mgr.Middleware(mux))
+		t.Cleanup(ts.Close)
+		return ts
+	}
+
+	first, err := NewAuthManager(AuthConfig{User: "admin", Pass: "secret", SessionSecret: sessionSecret})
+	if err != nil {
+		t.Fatalf("NewAuthManager: %v", err)
+	}
+	ts := newServer(first)
+
+	resp, err := http.Post(ts.URL+"/api/login", "application/json", strings.NewReader(`{"username":"admin","password":"secret"}`))
+	if err != nil {
+		t.Fatalf("POST /api/login failed: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 for a successful login, got %d", resp.StatusCode)
+	}
+	cookie, err := http.ParseSetCookie(resp.Header.Get("Set-Cookie"))
+	if err != nil {
+		t.Fatalf("expected a session cookie, got %v", err)
+	}
+
+	// A new process: new manager, same secret.
+	second, err := NewAuthManager(AuthConfig{User: "admin", Pass: "secret", SessionSecret: sessionSecret})
+	if err != nil {
+		t.Fatalf("NewAuthManager after restart: %v", err)
+	}
+
+	ts2 := newServer(second)
+	req, err := http.NewRequest(http.MethodGet, ts2.URL+"/api/session", nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: cookie.Value})
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /api/session failed: %v", err)
+	}
+	defer resp.Body.Close()
+	var fresh sessionInfo
+	if err := json.NewDecoder(resp.Body).Decode(&fresh); err != nil {
+		t.Fatalf("bad JSON: %v", err)
+	}
+	if !fresh.Authenticated {
+		t.Fatal("expected the pre-restart cookie to still authenticate")
+	}
+	if fresh.User == nil || fresh.User.Name != "admin" || fresh.User.Monogram != "A" {
+		t.Fatalf("expected the admin identity after restart, got %+v", fresh.User)
+	}
+}
+
+// TestSessionCookieValidation covers the ways a cookie must not be trusted:
+// edited claims, a tag from another key, an expired expiry and garbage.
+func TestSessionCookieValidation(t *testing.T) {
+	mgr, err := NewAuthManager(AuthConfig{
+		User:          "admin",
+		Pass:          "secret",
+		SessionSecret: "0123456789abcdef0123456789abcdef",
+	})
+	if err != nil {
+		t.Fatalf("NewAuthManager: %v", err)
+	}
+	user := sessionUser{Name: "admin", Monogram: "A"}
+
+	request := func(value string) *http.Request {
+		r := httptest.NewRequest(http.MethodGet, "/api/data", nil)
+		r.AddCookie(&http.Cookie{Name: sessionCookieName, Value: value})
+		return r
+	}
+
+	valid := mgr.signSession(user, time.Now().Add(time.Hour))
+	if !mgr.isAuthenticated(request(valid)) {
+		t.Fatal("expected a freshly signed cookie to authenticate")
+	}
+
+	// Same tag, different claims: promote the identity to root.
+	parts := strings.Split(valid, ".")
+	if len(parts) != 3 {
+		t.Fatalf("unexpected cookie shape %q", valid)
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		t.Fatalf("decode payload: %v", err)
+	}
+	var claims sessionClaims
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		t.Fatalf("decode claims: %v", err)
+	}
+	claims.User.Name = "root"
+	edited, err := json.Marshal(claims)
+	if err != nil {
+		t.Fatalf("encode claims: %v", err)
+	}
+	forged := parts[0] + "." + base64.RawURLEncoding.EncodeToString(edited) + "." + parts[2]
+	if mgr.isAuthenticated(request(forged)) {
+		t.Fatal("an edited payload must be rejected")
+	}
+
+	// A well-formed cookie signed by a different installation.
+	foreign, err := NewAuthManager(AuthConfig{
+		SessionSecret: "fedcba9876543210fedcba9876543210",
+	})
+	if err != nil {
+		t.Fatalf("NewAuthManager: %v", err)
+	}
+	if mgr.isAuthenticated(request(foreign.signSession(user, time.Now().Add(time.Hour)))) {
+		t.Fatal("a cookie signed with another key must be rejected")
+	}
+
+	if mgr.isAuthenticated(request(mgr.signSession(user, time.Now().Add(-time.Second)))) {
+		t.Fatal("an expired cookie must be rejected")
+	}
+
+	for _, value := range []string{"", "garbage", "v1.onlypayload", "v2." + parts[1] + "." + parts[2], "v1.!!!!.????"} {
+		if mgr.isAuthenticated(request(value)) {
+			t.Errorf("cookie %q must be rejected", value)
+		}
+	}
+}
+
+// TestSessionSecretValidation pins the two SESSION_SECRET rules: a configured
+// secret must be long enough to be unguessable, and a missing one must still
+// boot with a per-process key instead of breaking the dashboard.
+func TestSessionSecretValidation(t *testing.T) {
+	if _, err := NewAuthManager(AuthConfig{SessionSecret: "too-short"}); err == nil {
+		t.Fatal("expected an error for a short SESSION_SECRET")
+	}
+
+	mgr, err := NewAuthManager(AuthConfig{})
+	if err != nil {
+		t.Fatalf("NewAuthManager without SESSION_SECRET: %v", err)
+	}
+	if len(mgr.sessionKey) != sessionKeySize {
+		t.Fatalf("expected a %d-byte fallback key, got %d", sessionKeySize, len(mgr.sessionKey))
 	}
 }
 

@@ -91,7 +91,8 @@ fixed), so a rebuild does not need a manual cache clear.
 `/api/session`, `/api/login`, `/api/logout`, `/api/oidc/login` and `/api/oidc/callback` are the only
 unauthenticated API paths; everything else under `/api/` and `/ws` answers
 `401 {"error":"Unauthorized"}` without a session. The session cookie is `HttpOnly`, so the token
-never reaches JavaScript.
+never reaches JavaScript; it carries the identity and its expiry signed with `SESSION_SECRET` (see
+[Sessions](#sessions)).
 
 ### Sign-in
 
@@ -114,6 +115,24 @@ claim) is refused with `/?auth_error=forbidden`, and an empty list is a startup 
 never mean "everyone". The `redirect_uri` is derived from the request (`X-Forwarded-Proto` and
 `Host`), so a reverse proxy must pass the public host through; register
 `<public base>/api/oidc/callback` at the IdP.
+
+### Sessions
+
+The session cookie is self-contained: `v1.<claims>.<hmac>`, where the claims are the signed-in
+identity plus the expiry (24 h) and the tag is HMAC-SHA256 over the claims under `SESSION_SECRET`.
+Nothing is stored server-side, so `POST /api/logout` clears the cookie in the browser while a copy
+taken earlier stays valid until it expires — a bearer token, no server-side revocation list.
+
+`SESSION_SECRET` is the only session setting, it must be at least 32 characters, and it is read
+from the environment only (a CLI flag would expose it in the process list):
+
+```bash
+export SESSION_SECRET="$(openssl rand -hex 32)"
+```
+
+Keep the value stable: the same secret after a restart accepts the cookies already handed out, a
+new one signs everyone out. Without it the server still boots, signs the cookies with a random
+per-process key and logs a warning that sign-ins will not survive a restart.
 
 ### Frontend notes
 
@@ -205,6 +224,10 @@ export AMI_PASS=admin
 export HTTP_PORT=8080
 export ADMIN_USER=admin
 export ADMIN_PASSWORD=admin
+# Signing key for the session cookie (see Sessions). Generate it once with
+# `openssl rand -hex 32` and keep it: the same value after a restart keeps the
+# existing sign-ins. Unset = random per-process key, everyone signs in again.
+export SESSION_SECRET=replace-with-64-hex-characters-from-openssl-rand-hex-32
 
 # Optional SSO — all four together, or none at all (see Sign-in)
 export OIDC_ISSUER_URL=https://id.example.com
@@ -231,6 +254,7 @@ docker run -d -p 8080:8080 \
   -e AMI_PASS=admin \
   -e ADMIN_USER=admin \
   -e ADMIN_PASSWORD=admin \
+  -e SESSION_SECRET=replace-with-64-hex-characters-from-openssl-rand-hex-32 \
   --name asterisk-dashboard \
   asterisk-dashboard
 ```

@@ -58,6 +58,9 @@ func main() {
 	oidcClientID := os.Getenv("OIDC_CLIENT_ID")
 	oidcClientSecret := os.Getenv("OIDC_CLIENT_SECRET")
 	oidcAllowed := os.Getenv("OIDC_ALLOWED_EMAILS")
+	// The session-cookie signing key is env-only as well: a CLI flag would put
+	// the secret in the process list.
+	sessionSecret := os.Getenv("SESSION_SECRET")
 
 	// Sign-in configuration is validated before anything listens: a half-set
 	// password pair or a half-set OIDC block would otherwise fail silently, at
@@ -198,7 +201,7 @@ func main() {
 	mux := http.NewServeMux()
 	webHandler := web.NewServer(srv, hub, assets)
 
-	authCfg := web.AuthConfig{User: *adminUser, Pass: *adminPass}
+	authCfg := web.AuthConfig{User: *adminUser, Pass: *adminPass, SessionSecret: sessionSecret}
 	if oidcSet {
 		authCfg.OIDC = &web.OIDCConfig{
 			IssuerURL:     oidcIssuer,

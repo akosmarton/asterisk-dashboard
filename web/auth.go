@@ -1,10 +1,14 @@
 package web
 
 import (
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
-	"encoding/hex"
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"sync"
@@ -13,8 +17,10 @@ import (
 )
 
 const (
-	sessionCookieName = "session_token"
-	sessionDuration   = 24 * time.Hour
+	sessionCookieName    = "session_token"
+	sessionCookieVersion = "v1"
+	sessionDuration      = 24 * time.Hour
+	sessionKeySize       = 32
 	// maxLoginBody caps the JSON credentials body.
 	maxLoginBody = 4096
 )
@@ -26,6 +32,10 @@ type AuthConfig struct {
 	User string // ADMIN_USER; empty = password sign-in off
 	Pass string
 	OIDC *OIDCConfig // nil = SSO off
+	// SessionSecret is the SESSION_SECRET the session cookies are signed with.
+	// The same value after a restart keeps existing sign-ins valid; empty means
+	// a random per-process key, so every restart signs everyone out.
+	SessionSecret string
 }
 
 // sessionUser is the signed-in identity, echoed to the SPA by /api/session and
@@ -36,30 +46,30 @@ type sessionUser struct {
 	Monogram string `json:"monogram"`
 }
 
-type session struct {
-	expires time.Time
-	user    sessionUser
-}
-
 type AuthManager struct {
 	expectedUser string
 	expectedPass string
 	oidc         *oidcClient
-	sessions     map[string]session
+	sessionKey   []byte // HMAC key for the session cookie; see sessionKeyFromSecret
 	authStates   map[string]oidcState
 	mu           sync.RWMutex
 }
 
-// NewAuthManager builds the auth manager. The error is non-nil only when OIDC
-// discovery fails, so a typo'd issuer URL fails at boot instead of at the first
-// sign-in; callers treat it as fatal.
+// NewAuthManager builds the auth manager. Errors are fatal to the caller: an
+// unusable SESSION_SECRET or a failed OIDC discovery must not turn into a
+// running server whose sign-in silently misbehaves.
 func NewAuthManager(cfg AuthConfig) (*AuthManager, error) {
 	a := &AuthManager{
 		expectedUser: cfg.User,
 		expectedPass: cfg.Pass,
-		sessions:     make(map[string]session),
 		authStates:   make(map[string]oidcState),
 	}
+
+	key, err := sessionKeyFromSecret(cfg.SessionSecret)
+	if err != nil {
+		return nil, err
+	}
+	a.sessionKey = key
 
 	if cfg.OIDC != nil {
 		client, err := newOIDCClient(cfg.OIDC)
@@ -72,54 +82,109 @@ func NewAuthManager(cfg AuthConfig) (*AuthManager, error) {
 	return a, nil
 }
 
-func (a *AuthManager) generateToken() string {
-	b := make([]byte, 32)
-	_, _ = rand.Read(b)
-	return hex.EncodeToString(b)
+// sessionKeyFromSecret turns SESSION_SECRET into the HMAC key that signs the
+// session cookies. A stable secret is what keeps a sign-in valid across a
+// restart: any other value invalidates every cookie already handed out. An
+// empty secret falls back to a random per-process key, which keeps the server
+// usable but signs everyone out on restart, so it is logged rather than
+// treated as fatal.
+func sessionKeyFromSecret(secret string) ([]byte, error) {
+	if secret == "" {
+		key := make([]byte, sessionKeySize)
+		if _, err := rand.Read(key); err != nil {
+			return nil, fmt.Errorf("generate session key: %w", err)
+		}
+		log.Println("[Auth] SESSION_SECRET is not set: session cookies are signed with a random key, so a restart signs everyone out")
+		return key, nil
+	}
+	if len(secret) < sessionKeySize {
+		return nil, fmt.Errorf("SESSION_SECRET must be at least %d characters (generate one with `openssl rand -hex 32`)", sessionKeySize)
+	}
+	return []byte(secret), nil
 }
 
-// currentSession returns the session for the request cookie, or nil when there
-// is none, when the token is unknown, or when it has expired. With no sign-in
-// method configured it always returns nil: there is no open mode.
-func (a *AuthManager) currentSession(r *http.Request) *session {
+// sessionClaims is the signed cookie payload: the signed-in identity plus the
+// expiry the client cannot move without breaking the HMAC.
+type sessionClaims struct {
+	User    sessionUser `json:"user"`
+	Expires int64       `json:"exp"`
+}
+
+// signSession encodes user with its expiry and tags it with the manager's key.
+// The MAC covers the payload bytes, so the claims cannot be edited into a
+// different identity or a later expiry.
+func (a *AuthManager) signSession(user sessionUser, expires time.Time) string {
+	payload, err := json.Marshal(sessionClaims{User: user, Expires: expires.Unix()})
+	if err != nil {
+		panic("web: marshal session claims: " + err.Error()) // strings and an int only
+	}
+	mac := hmac.New(sha256.New, a.sessionKey)
+	mac.Write(payload)
+	return sessionCookieVersion + "." +
+		base64.RawURLEncoding.EncodeToString(payload) + "." +
+		base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+}
+
+// parseSession verifies a cookie value and returns the identity it carries.
+// The tag is compared in constant time (hmac.Equal), so a forged cookie cannot
+// be discovered tag byte by tag byte.
+func (a *AuthManager) parseSession(value string) *sessionUser {
+	version, rest, ok := strings.Cut(value, ".")
+	if !ok || version != sessionCookieVersion {
+		return nil
+	}
+	encodedPayload, encodedMAC, ok := strings.Cut(rest, ".")
+	if !ok {
+		return nil
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(encodedPayload)
+	if err != nil {
+		return nil
+	}
+	gotMAC, err := base64.RawURLEncoding.DecodeString(encodedMAC)
+	if err != nil {
+		return nil
+	}
+	mac := hmac.New(sha256.New, a.sessionKey)
+	mac.Write(payload)
+	if !hmac.Equal(mac.Sum(nil), gotMAC) {
+		return nil
+	}
+
+	var claims sessionClaims
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return nil
+	}
+	if time.Now().After(time.Unix(claims.Expires, 0)) {
+		return nil
+	}
+	return &claims.User
+}
+
+// currentSession returns the identity carried by the request's session cookie,
+// or nil when there is none, when the cookie was forged, or when it has
+// expired. With no sign-in method configured it always returns nil: there is
+// no open mode.
+func (a *AuthManager) currentSession(r *http.Request) *sessionUser {
 	cookie, err := r.Cookie(sessionCookieName)
 	if err != nil || cookie.Value == "" {
 		return nil
 	}
-
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	sess, exists := a.sessions[cookie.Value]
-	if !exists {
-		return nil
-	}
-
-	if time.Now().After(sess.expires) {
-		delete(a.sessions, cookie.Value)
-		return nil
-	}
-
-	return &sess
+	return a.parseSession(cookie.Value)
 }
 
 func (a *AuthManager) isAuthenticated(r *http.Request) bool {
 	return a.currentSession(r) != nil
 }
 
-// startSession mints a token for user and sets the session cookie. The cookie is
+// startSession sets the session cookie for user. The cookie carries the signed
+// identity, so the same key after a restart keeps the sign-in valid; it is
 // HttpOnly, so the client never sees the token.
 func (a *AuthManager) startSession(w http.ResponseWriter, user sessionUser) {
-	token := a.generateToken()
 	expires := time.Now().Add(sessionDuration)
-
-	a.mu.Lock()
-	a.sessions[token] = session{expires: expires, user: user}
-	a.mu.Unlock()
-
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookieName,
-		Value:    token,
+		Value:    a.signSession(user, expires),
 		Path:     "/",
 		Expires:  expires,
 		HttpOnly: true,
@@ -171,9 +236,9 @@ func (a *AuthManager) HandleSession(w http.ResponseWriter, r *http.Request) {
 		OIDCLogin:     a.oidc != nil,
 	}
 
-	if sess := a.currentSession(r); sess != nil {
+	if user := a.currentSession(r); user != nil {
 		info.Authenticated = true
-		info.User = &sess.user
+		info.User = user
 	}
 
 	writeJSON(w, http.StatusOK, info)
@@ -215,18 +280,14 @@ func (a *AuthManager) HandleLogin(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
-// HandleLogout drops the session and the cookie. It is idempotent: signing out
-// without a session is not an error.
+// HandleLogout clears the session cookie. It is idempotent: signing out without
+// a session is not an error. The cookie is self-contained, so this signs out the
+// browser holding it; a copy taken earlier stays valid until its expiry, like
+// any bearer token.
 func (a *AuthManager) HandleLogout(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSONError(w, http.StatusMethodNotAllowed, "Method not allowed.")
 		return
-	}
-
-	if cookie, err := r.Cookie(sessionCookieName); err == nil && cookie.Value != "" {
-		a.mu.Lock()
-		delete(a.sessions, cookie.Value)
-		a.mu.Unlock()
 	}
 
 	http.SetCookie(w, &http.Cookie{

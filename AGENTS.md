@@ -77,9 +77,12 @@ ui/src/lib/components/  # Sidebar, Topbar, MetricCard, DataTable, LoginView, Bra
   signs in (there is no open mode) and the server logs a warning. `OIDC_ALLOWED_EMAILS` is the
   authorization — the ID token only proves the account — so an unlisted address is refused with
   `/?auth_error=forbidden`, and an empty allow-list is a startup error rather than "everyone".
-- Sessions are an in-memory `map[token]session` (expiry + user identity) with a 24 h TTL
-  (`web/auth.go`), so a restart logs everyone out. Don't "fix" that with a persistent store unless
-  asked.
+- **The session cookie is stateless and signed**: `v1.<claims>.<hmac>`, claims = identity + expiry,
+  tag = HMAC-SHA256 under `SESSION_SECRET` (`web/auth.go`). There is no session store and no
+  revocation list; logout just clears the cookie, so the same secret across a restart is what keeps
+  sign-ins valid (a new one signs everyone out). `SESSION_SECRET` is env-only, at least 32
+  characters, and missing means a random per-process key plus a startup warning — never a hard
+  failure. Verify the tag with `hmac.Equal`, never with `==`.
 - **`DashboardData` (`service/asterisk.go`) is the contract** for `/api/data` and every WebSocket
   message; `ui/src/lib/types.ts` mirrors it. Change a Go struct and update `types.ts` in the same
   change, or the SPA reads `undefined`.

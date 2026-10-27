@@ -2,6 +2,8 @@ package web
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"fmt"
 	"log"
 	"net/http"
@@ -14,6 +16,16 @@ import (
 
 // oidcStateDuration is how long a started authorization request stays valid.
 const oidcStateDuration = 10 * time.Minute
+
+// randomState returns the unguessable state parameter that ties a callback to
+// the request that started the flow.
+func randomState() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("generate OIDC state: %w", err)
+	}
+	return base64.RawURLEncoding.EncodeToString(b), nil
+}
 
 // OIDCConfig is the deployment-side SSO configuration. All four values are
 // required together: the ID token only proves the account, AllowedEmails is the
@@ -95,7 +107,11 @@ func (a *AuthManager) HandleOIDCLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	state := a.generateToken()
+	state, err := randomState()
+	if err != nil {
+		http.Redirect(w, r, "/?auth_error=failed", http.StatusSeeOther)
+		return
+	}
 	verifier := oauth2.GenerateVerifier()
 
 	now := time.Now()
