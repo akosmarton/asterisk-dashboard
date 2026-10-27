@@ -81,7 +81,7 @@ fixed), so a rebuild does not need a manual cache clear.
 | Endpoint | Session | Response |
 | --- | --- | --- |
 | `GET /api/session` | no | `{"authenticated": bool, "password_login": bool, "oidc_login": bool, "user": {"name","email","monogram"} \| null}` |
-| `POST /api/login` | no | JSON `{"username","password"}` → `{"ok":true}` + `Set-Cookie`, or `401 {"error"}` |
+| `POST /api/login` | no | JSON `{"username","password"}` → `{"ok":true}` + `Set-Cookie`, `401 {"error"}`, or `429` + `Retry-After` after 5 attempts/min/IP |
 | `DELETE /api/session` | no | public, idempotent logout: `204`, clears the cookie when present |
 | `GET /api/oidc/login` | no | `303` to the IdP's authorization endpoint: starts the PKCE flow (or back to `/?auth_error=failed` when SSO is off) |
 | `GET /api/oidc/callback` | no | `303` to `/` on success, else `/?auth_error=failed` or `/?auth_error=forbidden` |
@@ -228,6 +228,9 @@ cp .env.example .env   # fill in AMI_*, ADMIN_*, SESSION_SECRET and optional OID
 set -a; . ./.env; set +a
 ./asterisk-dashboard
 ```
+Behind a reverse proxy, the client address is taken from `X-Forwarded-For`
+only when the direct peer is loopback, link-local or private (including IPv6
+ULA); otherwise the transport peer is used.
 
 ### Using Docker Compose:
 ```bash

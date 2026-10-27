@@ -201,7 +201,11 @@ func main() {
 	mux := http.NewServeMux()
 	webHandler := web.NewServer(srv, hub, assets)
 
-	authCfg := web.AuthConfig{User: *adminUser, Pass: *adminPass, SessionSecret: sessionSecret}
+	authCfg := web.AuthConfig{
+		User:          *adminUser,
+		Pass:          *adminPass,
+		SessionSecret: sessionSecret,
+	}
 	if oidcSet {
 		authCfg.OIDC = &web.OIDCConfig{
 			IssuerURL:     oidcIssuer,

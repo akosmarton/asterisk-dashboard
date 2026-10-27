@@ -78,7 +78,8 @@ ui/src/lib/components/  # Sidebar, Topbar, MetricCard, DataTable, LoginView, Bra
   signs in (there is no open mode) and the server logs a warning. `OIDC_ALLOWED_EMAILS` is the
   authorization — the ID token only proves the account — so an unlisted address is refused with
   `/?auth_error=forbidden`, and an empty allow-list is a startup error rather than "everyone".
-  The password-login body is capped at 4 KiB (`maxLoginBody`, `http.MaxBytesReader`).
+  The password-login body is capped at 4 KiB (`maxLoginBody`, `http.MaxBytesReader`)
+  and limited to 5 attempts/minute per IP (burst 5, `429` + `Retry-After`).
 - **The session cookie is stateless and signed**: `asterisk_session` = `v1.<base64url(claims)>.<hmac>`,
   claims = `{sub, name, email, aud: "asterisk", exp}`, tag = HMAC-SHA256 over `session.v1.` plus the
   payload under `SESSION_SECRET` (`web/session.go`), scoped to `Path=/api` (the SPA shell and

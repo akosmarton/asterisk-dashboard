@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"unicode"
@@ -43,6 +44,7 @@ type AuthManager struct {
 	expectedPass string
 	oidc         *oidcClient
 	sessions     *sessionCodec // signs and verifies the session cookie
+	loginLimiter *loginLimiter
 	authStates   map[string]oidcState
 	mu           sync.RWMutex
 }
@@ -54,6 +56,7 @@ func NewAuthManager(cfg AuthConfig) (*AuthManager, error) {
 	a := &AuthManager{
 		expectedUser: cfg.User,
 		expectedPass: cfg.Pass,
+		loginLimiter: newLoginLimiter(loginAttempts, loginWindow),
 		authStates:   make(map[string]oidcState),
 	}
 
@@ -212,6 +215,12 @@ func (a *AuthManager) HandleLogin(w http.ResponseWriter, r *http.Request) {
 
 	if r.Method != http.MethodPost {
 		writeJSONError(w, http.StatusMethodNotAllowed, "Method not allowed.")
+		return
+	}
+
+	if ok, retry := a.loginLimiter.allow(clientIP(r)); !ok {
+		w.Header().Set("Retry-After", strconv.Itoa(retry))
+		writeJSONError(w, http.StatusTooManyRequests, "Too Many Requests.")
 		return
 	}
 
